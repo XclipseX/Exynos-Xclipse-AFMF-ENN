@@ -104,7 +104,7 @@ class MainActivity : ComponentActivity() {
                     npu = {
                         NpuScreen(report = report, busy = diagBusy, onRun = ::runDiagnostics,
                             onCopy = ::copyReport, onShare = ::shareReport,
-                            gpuBench = gpuBench, gpuBusy = gpuBusy, onGpuBench = ::runGpuBench)
+                            gpuBench = gpuBench, gpuBusy = gpuBusy, onGpuBench = ::runGpuBench, onCopyGpu = ::copyGpuBench)
                     },
                     telemetry = {
                         val ts by TelemetryRecorder.state.collectAsState()
@@ -193,14 +193,26 @@ class MainActivity : ComponentActivity() {
         Thread {
             val sb = StringBuilder()
             sb.append(try { com.fluidframes.vulkan.ClBridge.probe() } catch (t: Throwable) { "OpenCL probe: ${t.javaClass.simpleName}: ${t.message}" }).append("\n\n")
-            for (ls in intArrayOf(180, 320)) {
+            // Làm nóng GPU trước (xung GPU tăng dần), rồi mỗi mức chạy Vulkan -> OpenCL -> Vulkan để thấy độ lệch do xung.
+            val (wpw, wph) = com.fluidframes.vulkan.NativePipeline.procSize(640, 2340, 1080)
+            com.fluidframes.vulkan.NativePipeline.benchWarp(this, 2340, 1080, wpw, wph, 100)
+            sb.append("Khung ra 2340x1080, 100 lần mỗi bài, tv = trung vị\n\n")
+            for (ls in intArrayOf(192, 640, 1280)) {
                 val (pw, ph) = com.fluidframes.vulkan.NativePipeline.procSize(ls, 2340, 1080)
-                sb.append(com.fluidframes.vulkan.NativePipeline.benchWarp(this, 2340, 1080, pw, ph, 50)).append('\n')
-                sb.append(try { com.fluidframes.vulkan.ClBridge.benchWarp(this, 2340, 1080, pw, ph, 50) } catch (t: Throwable) { "OpenCL warp: ${t.javaClass.simpleName}: ${t.message}" }).append("\n\n")
+                sb.append("— Mức ${ls}: —\n")
+                sb.append(com.fluidframes.vulkan.NativePipeline.benchWarp(this, 2340, 1080, pw, ph, 100)).append('\n')
+                sb.append(try { com.fluidframes.vulkan.ClBridge.benchWarp(this, 2340, 1080, pw, ph, 100) } catch (t: Throwable) { "OpenCL warp: ${t.javaClass.simpleName}: ${t.message}" }).append('\n')
+                sb.append(com.fluidframes.vulkan.NativePipeline.benchWarp(this, 2340, 1080, pw, ph, 100)).append("\n\n")
             }
             val text = sb.toString().trim()
             runOnUiThread { gpuBench = text; gpuBusy = false }
         }.start()
+    }
+
+    private fun copyGpuBench() {
+        val text = gpuBench ?: return
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Xclipse ENN-SS GPU", text))
+        Toast.makeText(this, "Đã sao chép kết quả đo GPU", Toast.LENGTH_SHORT).show()
     }
 
     private fun copyReport() {

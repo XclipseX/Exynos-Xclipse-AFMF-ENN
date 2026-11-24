@@ -30,6 +30,7 @@ fun NpuScreen(
     gpuBench: String? = null,
     gpuBusy: Boolean = false,
     onGpuBench: () -> Unit = {},
+    onCopyGpu: () -> Unit = {},
 ) {
     Column(Modifier.fillMaxWidth()) {
         LargeHeader("NPU Exynos", "Kiểm tra ENN, nạp model và đo tốc độ", minHeight = 170.dp)
@@ -97,6 +98,8 @@ fun NpuScreen(
                 if (gpuBench != null) {
                     Spacer(Modifier.height(12.dp))
                     Text(gpuBench, style = MaterialTheme.typography.bodyMedium, color = FF.c.text)
+                    Spacer(Modifier.height(12.dp))
+                    PillButton("Sao chép kết quả", onCopyGpu, primary = false, enabled = !gpuBusy)
                 }
             }
             FFCard {

@@ -3,6 +3,10 @@
 // thì số ms mới so được (warp.comp có nhánh sớm theo dữ liệu: vùng tĩnh, HUD, occlusion).
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
+#include <string>
+#include <vector>
+#include <algorithm>
 
 namespace ff::bench {
 
@@ -52,5 +56,29 @@ inline void FillAuxRgba16f(uint16_t* dst, int flowW, int flowH) {
 struct WarpBenchParams { int outW, outH, procW, procH; };
 // Buffer metrics: toàn 0 (không chuyển cảnh). Số phần tử uint tối thiểu: 64.
 constexpr int kMetricsUints = 64;
+
+// Tóm tắt khung ra RGBA8 để so hai backend có cùng kết quả không (cùng việc thì số phải gần như trùng).
+inline std::string Summary(const uint8_t* p, int w, int h, const uint8_t* cur) {
+    double s[3] = {0, 0, 0};
+    size_t sameAsCur = 0;
+    const size_t n = static_cast<size_t>(w) * h;
+    for (size_t i = 0; i < n; ++i) {
+        for (int c = 0; c < 3; ++c) s[c] += p[i * 4 + c];
+        if (cur && p[i * 4] == cur[i * 4] && p[i * 4 + 1] == cur[i * 4 + 1] && p[i * 4 + 2] == cur[i * 4 + 2]) ++sameAsCur;
+    }
+    char b[120];
+    std::snprintf(b, sizeof(b), "out RGB tb %.2f/%.2f/%.2f, trùng khung thật %.1f%%",
+                  s[0] / n, s[1] / n, s[2] / n, 100.0 * sameAsCur / n);
+    return b;
+}
+
+// Trung vị (sửa mảng).
+inline double Median(std::vector<double>& v) {
+    if (v.empty()) return -1;
+    std::sort(v.begin(), v.end());
+    return v[v.size() / 2];
+}
+
+constexpr int kWarmup = 30;
 
 }  // namespace ff::bench

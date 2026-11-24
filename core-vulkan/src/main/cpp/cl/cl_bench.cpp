@@ -186,7 +186,7 @@ std::string clBenchWarp(const std::string& clSource, int outW, int outH, int pro
     const size_t global[2] = {static_cast<size_t>(clabi::RoundUp8(outW)), static_cast<size_t>(clabi::RoundUp8(outH))};
 
     // Warm-up.
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < ff::bench::kWarmup; ++i) {
         if ((e = cl->EnqueueNDRangeKernel(r.q, r.k, 2, nullptr, global, local, 0, nullptr, nullptr)) != CL_SUCCESS)
             return Err("clEnqueueNDRangeKernel(warm-up)", e);
     }
@@ -195,6 +195,7 @@ std::string clBenchWarp(const std::string& clSource, int outW, int outH, int pro
     // Đo: mỗi lần 1 dispatch + clFinish (giống Vulkan submit+wait mỗi khung).
     double gpuSum = 0.0, wallSum = 0.0, gpuMin = 1e30;
     int gpuN = 0;
+    std::vector<double> gpuAll;
     for (int i = 0; i < iters; ++i) {
         cl_event ev = nullptr;
         const auto t0 = Clock::now();
@@ -205,13 +206,19 @@ std::string clBenchWarp(const std::string& clSource, int outW, int outH, int pro
         wallSum += MsSince(t0);
         double ms = 0.0;
         if (EventMs(cl, ev, &ms)) {
-            gpuSum += ms;
+            gpuSum += ms; gpuAll.push_back(ms);
             if (ms < gpuMin) gpuMin = ms;
             ++gpuN;
         }
         cl->ReleaseEvent(ev);
         r.evs.back() = nullptr;
     }
+
+    // Đọc khung ra để so kết quả với Vulkan.
+    std::vector<uint8_t> outHost(prevHost.size());
+    std::string sum = "out: không đọc được";
+    if (cl->EnqueueReadImage(r.q, out, CL_TRUE, origin, regOut, 0, 0, outHost.data(), 0, nullptr, nullptr) == CL_SUCCESS)
+        sum = ff::bench::Summary(outHost.data(), outW, outH, curHost.data());
 
     // Chi phí chép 1 khung RGBA8 host->device (nếu không có interop AHB thì phải chép mỗi khung).
     double uploadGpu = -1.0;
@@ -224,12 +231,13 @@ std::string clBenchWarp(const std::string& clSource, int outW, int outH, int pro
     const double uploadWall = MsSince(tUp);
     EventMs(cl, upEv, &uploadGpu);
 
-    char buf[320];
+    const double med = ff::bench::Median(gpuAll);
+    char buf[360];
     std::snprintf(buf, sizeof(buf),
-                  "OpenCL warp: gpu %.2f ms (min %.2f), wall %.2f ms, upload %.2f ms (gpu %.2f) (%dx%d, proc %dx%d, %d iters, build %.0f ms)",
-                  gpuN ? gpuSum / gpuN : -1.0, gpuN ? gpuMin : -1.0, wallSum / iters, uploadWall, uploadGpu,
-                  outW, outH, procW, procH, iters, buildMs);
-    return buf;
+                  "OpenCL warp: gpu tv %.2f ms (tb %.2f, min %.2f), wall %.2f ms, chép 1 khung %.2f ms (gpu %.2f) (proc %dx%d, %d lần, build %.0f ms)",
+                  med, gpuN ? gpuSum / gpuN : -1.0, gpuN ? gpuMin : -1.0, wallSum / iters, uploadWall, uploadGpu,
+                  procW, procH, iters, buildMs);
+    return std::string(buf) + "\n  " + sum;
 }
 
 }  // namespace ffcl

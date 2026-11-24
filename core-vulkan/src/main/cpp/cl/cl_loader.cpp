@@ -60,6 +60,7 @@ void DoLoad() {
     Sym(g_lib, "clEnqueueWriteBuffer", a.EnqueueWriteBuffer, true);
     Sym(g_lib, "clEnqueueReadBuffer", a.EnqueueReadBuffer, true);
     Sym(g_lib, "clEnqueueWriteImage", a.EnqueueWriteImage, true);
+    Sym(g_lib, "clEnqueueReadImage", a.EnqueueReadImage, true);
     Sym(g_lib, "clFinish", a.Finish, true);
     Sym(g_lib, "clWaitForEvents", a.WaitForEvents, true);
     Sym(g_lib, "clGetEventProfilingInfo", a.GetEventProfilingInfo, true);

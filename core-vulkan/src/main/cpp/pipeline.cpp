@@ -1956,8 +1956,9 @@ std::string Pipeline::BenchWarp(int outW, int outH, int procW, int procH, int it
 
     VkCommandBuffer wcb = af_[0].cb;
     VkQueryPool qp = af_[0].qp;
-    double gpuSum = 0, wallSum = 0; int n = 0;
-    for (int it = 0; it < iters + 5; ++it) {
+    double gpuSum = 0, wallSum = 0, gpuMin = 1e30; int n = 0;
+    std::vector<double> gpuAll;
+    for (int it = 0; it < iters + bench::kWarmup; ++it) {
         vkResetCommandBuffer(wcb, 0);
         vkBeginCommandBuffer(wcb, &bi);
         vkCmdResetQueryPool(wcb, qp, 0, 8);
@@ -1972,16 +1973,55 @@ std::string Pipeline::BenchWarp(int outW, int outH, int procW, int procH, int it
         if (!SubmitAndWait(wcb, af_[0].fence)) { cleanup(); return "Vulkan warp: lỗi chạy: " + LastError(); }
         const double wall = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         double ms[1] = {0};
-        if (it >= 5 && ReadTimestampsFrom(qp, 0, 2, ms)) { gpuSum += ms[0]; wallSum += wall; ++n; }
+        if (it >= bench::kWarmup && ReadTimestampsFrom(qp, 0, 2, ms)) {
+            gpuSum += ms[0]; wallSum += wall; ++n; gpuAll.push_back(ms[0]); gpuMin = std::min(gpuMin, ms[0]);
+        }
+    }
+
+    // Đọc khung ra (out GENERAL -> buffer host) để so kết quả với OpenCL.
+    std::string sum = "out: không đọc được";
+    {
+        VkBuffer rb = VK_NULL_HANDLE; VkDeviceMemory rbMem = VK_NULL_HANDLE;
+        VkBufferCreateInfo rci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        rci.size = szF; rci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT; rci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateBuffer(dev_, &rci, nullptr, &rb) == VK_SUCCESS) {
+            VkMemoryRequirements rmr; vkGetBufferMemoryRequirements(dev_, rb, &rmr);
+            VkMemoryAllocateInfo rai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            rai.allocationSize = rmr.size;
+            rai.memoryTypeIndex = FindMemType(rmr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            if (rai.memoryTypeIndex != UINT32_MAX && vkAllocateMemory(dev_, &rai, nullptr, &rbMem) == VK_SUCCESS &&
+                vkBindBufferMemory(dev_, rb, rbMem, 0) == VK_SUCCESS) {
+                vkResetCommandBuffer(cb, 0);
+                vkBeginCommandBuffer(cb, &bi);
+                VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+                mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT; mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+                VkBufferImageCopy c{};
+                c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                c.imageExtent = {static_cast<uint32_t>(outW), static_cast<uint32_t>(outH), 1};
+                vkCmdCopyImageToBuffer(cb, af_[0].out.img, VK_IMAGE_LAYOUT_GENERAL, rb, 1, &c);
+                vkEndCommandBuffer(cb);
+                void* rp = nullptr;
+                if (SubmitAndWait(cb, fenceA_) && vkMapMemory(dev_, rbMem, 0, szF, 0, &rp) == VK_SUCCESS) {
+                    std::vector<uint8_t> curHost(static_cast<size_t>(szF));
+                    bench::FillRgba8(curHost.data(), outW, outH, true);
+                    sum = bench::Summary(static_cast<uint8_t*>(rp), outW, outH, curHost.data());
+                    vkUnmapMemory(dev_, rbMem);
+                }
+            }
+        }
+        if (rb) vkDestroyBuffer(dev_, rb, nullptr);
+        if (rbMem) vkFreeMemory(dev_, rbMem, nullptr);
     }
     cleanup();
     // Ép EnsureAsync tạo lại lần sau (descriptor khung 0 đang trỏ ảnh đã huỷ).
     afOutW_ = 0;
     if (n == 0) return "Vulkan warp: không đọc được timestamp";
-    char buf[160];
-    std::snprintf(buf, sizeof(buf), "Vulkan warp: gpu %.2f ms, wall %.2f ms (%dx%d, proc %dx%d, %d lần)",
-                  gpuSum / n, wallSum / n, outW, outH, procW, procH, n);
-    return buf;
+    const double med = bench::Median(gpuAll);
+    char buf[200];
+    std::snprintf(buf, sizeof(buf), "Vulkan warp: gpu tv %.2f ms (tb %.2f, min %.2f), wall %.2f ms (proc %dx%d, %d lần)",
+                  med, gpuSum / n, gpuMin, wallSum / n, procW, procH, n);
+    return std::string(buf) + "\n  " + sum;
 }
 
 }  // namespace ff

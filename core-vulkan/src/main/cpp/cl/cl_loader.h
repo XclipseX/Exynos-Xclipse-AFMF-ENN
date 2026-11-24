@@ -171,6 +171,8 @@ struct ClApi {
                                 cl_uint, const cl_event*, cl_event*);
     cl_int (*EnqueueWriteImage)(cl_command_queue, cl_mem, cl_bool, const size_t*, const size_t*,
                                 size_t, size_t, const void*, cl_uint, const cl_event*, cl_event*);
+    cl_int (*EnqueueReadImage)(cl_command_queue, cl_mem, cl_bool, const size_t*, const size_t*,
+                               size_t, size_t, void*, cl_uint, const cl_event*, cl_event*);
     cl_int (*Finish)(cl_command_queue);
     cl_int (*WaitForEvents)(cl_uint, const cl_event*);
     cl_int (*GetEventProfilingInfo)(cl_event, cl_profiling_info, size_t, void*, size_t*);
