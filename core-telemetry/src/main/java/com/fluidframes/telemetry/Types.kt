@@ -8,7 +8,7 @@ enum class Mode { PASSTHROUGH, FLOW_GPU, FLOW_NN }
  * cạnh ngắn suy ra theo tỉ lệ màn hình và làm tròn bội số 32. AUTO do Governor chọn.
  */
 enum class ProcTier(val label: String, val longSide: Int) {
-    AUTO("Mặc định (130p)", 0),
+    AUTO("Mặc định (360p)", 0),
     P720("720p", 1280),
     P540("540p", 960),
     P360("360p", 640),
@@ -17,6 +17,14 @@ enum class ProcTier(val label: String, val longSide: Int) {
     P180("130p", 320),
     P100("100p", 256),
     P70("70p", 192),
+    ;
+
+    companion object {
+        /** Mức dùng khi chọn AUTO. */
+        val DEFAULT = P360
+        /** Chỉ 3 mức có model flow INT8 trong APK. */
+        val AVAILABLE = listOf(AUTO, P720, P360, P70)
+    }
 }
 
 enum class FlowBackend(val label: String) {

@@ -28,7 +28,7 @@ import com.fluidframes.overlay.FluidSettings
 import com.fluidframes.telemetry.FlowBackend
 import com.fluidframes.telemetry.ProcTier
 
-private val tiers = listOf(ProcTier.AUTO, ProcTier.P720, ProcTier.P540, ProcTier.P360, ProcTier.P270, ProcTier.P216, ProcTier.P180, ProcTier.P100, ProcTier.P70)
+private val tiers = ProcTier.AVAILABLE
 private val backends = listOf(FlowBackend.AUTO, FlowBackend.NPU, FlowBackend.GPU, FlowBackend.OFF)
 private val backendLabels = listOf("Tự động", "NPU", "GPU", "Tắt")
 private val backendDesc = mapOf(
@@ -41,9 +41,9 @@ private val backendDesc = mapOf(
 private data class Preset(val name: String, val desc: String, val tier: ProcTier, val backend: FlowBackend)
 
 private val presets = listOf(
-    Preset("Cân bằng", "130p, NPU nếu có (không tự đổi giữa chừng)", ProcTier.AUTO, FlowBackend.AUTO),
+    Preset("Cân bằng", "360p, NPU nếu có (không tự đổi giữa chừng)", ProcTier.AUTO, FlowBackend.AUTO),
     Preset("Chất lượng", "720p, ưu tiên NPU", ProcTier.P720, FlowBackend.NPU),
-    Preset("Tiết kiệm", "360p, GPU, mát máy", ProcTier.P360, FlowBackend.GPU),
+    Preset("Tiết kiệm", "70p, GPU, mát máy", ProcTier.P70, FlowBackend.GPU),
 )
 
 @Composable
@@ -92,16 +92,6 @@ fun SettingsScreen(settings: FluidSettings, running: Boolean, onChange: (FluidSe
                 }
                 Spacer(Modifier.height(10.dp))
                 Text("Mặc định: LiteRT ép NPU Exynos 2600 chạy xung tối đa. Cân bằng/Tiết kiệm hạ xung NPU để ăn ít điện hơn. Dùng nút Đo điện để so.",
-                    style = MaterialTheme.typography.bodyMedium, color = FF.c.muted)
-            }
-
-            FFCard {
-                SectionTitle("Độ chính xác NPU")
-                Segmented(listOf("Tự động", "INT8", "FP16", "FP32"), settings.npuPrecision.coerceIn(0, 3)) {
-                    onChange(settings.copy(npuPrecision = it))
-                }
-                Spacer(Modifier.height(10.dp))
-                Text("INT8 nhanh và tiết kiệm điện nhất, FP16 cân bằng, FP32 chính xác nhất. Tự động chọn mức nhanh nhất có sẵn cho độ phân giải đang dùng.",
                     style = MaterialTheme.typography.bodyMedium, color = FF.c.muted)
             }
 

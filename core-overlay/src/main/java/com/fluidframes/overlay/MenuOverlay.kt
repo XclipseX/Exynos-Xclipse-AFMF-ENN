@@ -150,10 +150,6 @@ class MenuOverlay(
             col.addView(ui.dropdown(TIERS.map { it.label }, tierIndex(settings.tier)) {
                 settings = settings.copy(tier = TIERS[it]); onChange(settings)
             })
-            col.addView(ui.caption("Độ chính xác NPU (INT8 nhanh và tiết kiệm điện nhất)"))
-            col.addView(ui.dropdown(listOf("Tự động (INT8→FP16→FP32)", "INT8", "FP16", "FP32"), settings.npuPrecision.coerceIn(0, 3)) {
-                settings = settings.copy(npuPrecision = it); onChange(settings)
-            })
             col.addView(ui.caption("Độ phân giải chụp màn hình (thấp hơn = GPU nhẹ hơn, nhưng chữ/HUD của game mờ hơn)"))
             val outOpts = listOf(0, 1920, 1560, 1280)
             col.addView(ui.segmented(listOf("Gốc", "1920", "1560", "1280"), outOpts.indexOf(settings.outLongSide).coerceAtLeast(0)) {
@@ -301,7 +297,7 @@ class MenuOverlay(
             HudLines.LOAD to "Dòng: CPU / GPU % và MHz",
             HudLines.ERROR to "Dòng: lỗi (nếu có)",
         )
-        val TIERS = listOf(ProcTier.AUTO, ProcTier.P720, ProcTier.P540, ProcTier.P360, ProcTier.P270, ProcTier.P216, ProcTier.P180, ProcTier.P100, ProcTier.P70)
+        val TIERS = ProcTier.AVAILABLE
         val BACKENDS = listOf(FlowBackend.AUTO, FlowBackend.NPU, FlowBackend.GPU, FlowBackend.OFF)
     }
 }

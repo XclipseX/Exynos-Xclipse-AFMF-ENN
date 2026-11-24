@@ -47,7 +47,10 @@ jobs:
           if git fetch -q origin prebuilt-models 2>/dev/null; then
             mkdir -p app/src/main/assets/models
             git archive FETCH_HEAD models | tar -x -C /tmp
-            cp /tmp/models/*.tflite app/src/main/assets/models/
+            # Chỉ mang model app thật sự dùng: flow INT8 3 mức + SR x2/x1 đã huấn luyện.
+            for f in flow_192_int8 flow_640_int8 flow_1280_int8 sr_x2_1170x540 sr_x1_1536x704; do
+              [ -f /tmp/models/$f.tflite ] && cp /tmp/models/$f.tflite app/src/main/assets/models/ || echo "::warning title=model::thiếu $f.tflite"
+            done
             find app/src/main/assets/models -name '*.tflite' -size -2k -delete   # bỏ file rỗng (AOT một phần)
             ls -la app/src/main/assets/models
           fi

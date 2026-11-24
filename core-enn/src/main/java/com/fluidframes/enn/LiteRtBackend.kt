@@ -59,13 +59,8 @@ class LiteRtBackend(private val context: Context, private val preferNpu: Boolean
         close()
         lastError = ""
         if (!preferNpu) return false
-        // Thứ tự thử: theo lựa chọn người dùng; luôn có đường lui xuống độ chính xác cao hơn.
-        val order0 = when (precision) {
-            1 -> listOf("int8", "fp16", "")
-            2 -> listOf("fp16", "")
-            3 -> listOf("")
-            else -> listOf("int8", "fp16", "")
-        }
+        // APK chỉ mang model INT8 (3 mức 192/640/1280).
+        val order0 = listOf("int8")
         val files = order0.mapNotNull { suf ->
             val p = if (suf.isEmpty()) "models/flow_$longSide.tflite" else "models/flow_${longSide}_$suf.tflite"
             if (try { context.assets.open(p).use { it.available() > 2048 } } catch (_: Throwable) { false }) suf to p else null

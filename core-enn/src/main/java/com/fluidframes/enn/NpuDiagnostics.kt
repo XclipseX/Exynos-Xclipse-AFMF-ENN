@@ -59,12 +59,12 @@ object NpuDiagnostics {
 
         // 4. Model
         val sizes = listOf(640 to (640 to 288), 960 to (960 to 416), 1280 to (1280 to 576))
-        val modelSizes = sizes.map { (ls, _) ->
-            ls to (try { context.assets.open("models/flow_$ls.tflite").use { it.available() } } catch (t: Throwable) { -1 })
+        val modelSizes = listOf(192, 640, 1280).map { ls ->
+            ls to (try { context.assets.open("models/flow_${ls}_int8.tflite").use { it.available() } } catch (t: Throwable) { -1 })
         }
         rows += Row("Model trong APK", if (modelSizes.all { it.second > 1000 }) Level.OK else Level.FAIL,
             modelSizes.joinToString { "${it.first}: ${it.second}B" })
-        rows += Row("Đọc model bằng CPU", Level.INFO, NpuEnv.cpuLoadTest(context, "models/flow_640.tflite"))
+        rows += Row("Đọc model bằng CPU", Level.INFO, NpuEnv.cpuLoadTest(context, "models/flow_640_int8.tflite"))
 
         // 5. Thử từng cách nạp lên NPU
         var works = false
@@ -72,7 +72,7 @@ object NpuDiagnostics {
         for (s in NpuEnv.strategies) {
             val e = NpuEnv.create(context, s.env)
             try {
-                val m = NpuEnv.load(context, "models/flow_640.tflite", s, e)
+                val m = NpuEnv.load(context, "models/flow_640_int8.tflite", s, e)
                 m.close()
                 rows += Row("Cách ${s.id}: ${s.label}", Level.OK, "nạp được")
                 works = true

@@ -11,6 +11,7 @@ android {
     defaultConfig {
         applicationId = "com.fluidframes"
         minSdk = 31
+        ndk { abiFilters += "arm64-v8a" }
         targetSdk = 37
         val run = (System.getenv("GITHUB_RUN_NUMBER") ?: "0").toIntOrNull() ?: 0
         val sha = (System.getenv("GITHUB_SHA") ?: "local").take(7)

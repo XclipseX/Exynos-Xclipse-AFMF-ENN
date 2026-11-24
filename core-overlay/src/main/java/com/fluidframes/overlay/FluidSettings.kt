@@ -6,7 +6,7 @@ import com.fluidframes.telemetry.ProcTier
 
 data class FluidSettings(
     val enabled: Boolean = true,
-    val tier: ProcTier = ProcTier.AUTO,   // AUTO = 130p
+    val tier: ProcTier = ProcTier.AUTO,   // AUTO = 360p
     val backend: FlowBackend = FlowBackend.AUTO,
     val showHud: Boolean = true,
     /** Thử nghiệm: đánh dấu cửa sổ video là FLAG_SECURE để (có thể) bị loại khỏi MediaProjection. */
@@ -67,7 +67,7 @@ class SettingsStore(context: Context) {
 
     fun load(): FluidSettings = FluidSettings(
         enabled = prefs.getBoolean("enabled", true),
-        tier = enumOf("tier", ProcTier.AUTO),
+        tier = enumOf("tier", ProcTier.AUTO).let { if (it in ProcTier.AVAILABLE) it else ProcTier.AUTO },
         backend = enumOf("backend", FlowBackend.AUTO),
         showHud = prefs.getBoolean("hud", true),
         secureOverlay = prefs.getBoolean("secure", false),
