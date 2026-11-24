@@ -96,6 +96,15 @@ class NativePipeline private constructor(private var handle: Long) {
     }
 
     companion object {
+        /** Stress A/B Vulkan. Trả 0 nếu lỗi (xem stressError()). */
+        fun stressOpen(context: Context, outW: Int, outH: Int, procW: Int, procH: Int): Long = try {
+            NativeBridge.nativeStressOpen(context.assets, outW, outH, procW, procH)
+        } catch (t: Throwable) { 0L }
+        fun stressError(): String = try { NativeBridge.nativeCreateError() } catch (t: Throwable) { t.toString() }
+        /** [0,frames) wall ms, [frames,2*frames) GPU ms mỗi khung; null nếu lỗi. */
+        fun stressRun(h: Long, frames: Int): DoubleArray? = try { NativeBridge.nativeStressRun(h, frames) } catch (t: Throwable) { null }
+        fun stressClose(h: Long) { try { NativeBridge.nativeStressClose(h) } catch (_: Throwable) {} }
+
         /** Đo warp.comp (Vulkan) trên dữ liệu tổng hợp, cùng dữ liệu với ClBridge.benchWarp. */
         fun benchWarp(context: Context, outW: Int, outH: Int, procW: Int, procH: Int, iters: Int): String = try {
             NativeBridge.nativeBenchWarp(context.assets, outW, outH, procW, procH, iters)

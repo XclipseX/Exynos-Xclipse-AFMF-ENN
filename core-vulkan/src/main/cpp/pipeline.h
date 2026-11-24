@@ -103,6 +103,12 @@ public:
     // Gọi trên một Pipeline riêng (không dùng chung với pipeline đang chạy game).
     std::string BenchWarp(int outW, int outH, int procW, int procH, int iters);
 
+    // Stress A/B: chuỗi preprocess -> flowpack -> warp mỗi khung (giống đường NN thật), chạy liên tục.
+    // StressRun ghi 2*frames số: [0..frames) wall ms mỗi khung, [frames..2*frames) GPU ms mỗi khung.
+    bool StressOpen(int outW, int outH, int procW, int procH);
+    bool StressRun(int frames, double* out);
+    void StressClose();
+
 private:
     struct Img {
         VkImage img = VK_NULL_HANDLE;
@@ -234,6 +240,13 @@ private:
     int srInZp_ = -128, srOutZp_ = 0;
     bool srReady_ = false;
     bool SrRecord(AHardwareBuffer* lr, VkPipeline pipe, bool post, int slot);
+
+    // Stress
+    Img stressImg_[2];
+    std::vector<float> stressFlow_;
+    int stressOutW_ = 0, stressOutH_ = 0;
+    uint64_t stressFrame_ = 0;
+    bool UploadRgba8(Img& im, const uint8_t* data);
 
     // Tài nguyên
     Img lowPrev_, lowCur_, flow_, aux_, out_;

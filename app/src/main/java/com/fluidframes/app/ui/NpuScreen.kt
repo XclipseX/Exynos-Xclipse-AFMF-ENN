@@ -31,6 +31,7 @@ fun NpuScreen(
     gpuBusy: Boolean = false,
     onGpuBench: () -> Unit = {},
     onCopyGpu: () -> Unit = {},
+    onGpuStress: () -> Unit = {},
 ) {
     Column(Modifier.fillMaxWidth()) {
         LargeHeader("NPU Exynos", "Kiểm tra ENN, nạp model và đo tốc độ", minHeight = 170.dp)
@@ -95,11 +96,15 @@ fun NpuScreen(
                     style = MaterialTheme.typography.bodyMedium, color = FF.c.muted)
                 Spacer(Modifier.height(12.dp))
                 PillButton(if (gpuBusy) "Đang đo…" else "Đo OpenCL vs Vulkan", onGpuBench, enabled = !gpuBusy && !busy)
+                Spacer(Modifier.height(10.dp))
+                PillButton("Stress test A/B (~4 phút)", onGpuStress, primary = false, enabled = !gpuBusy && !busy)
+                Text("Chạy hết sức Vulkan / OpenCL chép / OpenCL dma_buf xen kẽ 15 giây mỗi đoạn. Rút sạc để đo điện đúng.",
+                    style = MaterialTheme.typography.bodyMedium, color = FF.c.muted)
                 if (gpuBench != null) {
                     Spacer(Modifier.height(12.dp))
                     Text(gpuBench, style = MaterialTheme.typography.bodyMedium, color = FF.c.text)
                     Spacer(Modifier.height(12.dp))
-                    PillButton("Sao chép kết quả", onCopyGpu, primary = false, enabled = !gpuBusy)
+                    if (!gpuBusy) PillButton("Sao chép kết quả", onCopyGpu, primary = false)
                 }
             }
             FFCard {

@@ -184,3 +184,32 @@ FN(jstring, nativeBenchWarp)(JNIEnv* env, jclass, jobject assetManager, jint out
     std::string r = p->BenchWarp(outW, outH, procW, procH, iters);
     return env->NewStringUTF(r.c_str());
 }
+
+// Stress A/B Vulkan: mở một Pipeline riêng, chạy khung liên tục theo từng đợt (Kotlin xen kẽ với OpenCL).
+FN(jlong, nativeStressOpen)(JNIEnv* env, jclass, jobject assetManager, jint outW, jint outH, jint procW, jint procH) {
+    AAssetManager* am = AAssetManager_fromJava(env, assetManager);
+    std::string err;
+    auto p = ff::Pipeline::Create(am, &err);
+    if (!p) { std::lock_guard<std::mutex> l(gErrMu); gCreateErr = err; return 0; }
+    if (!p->StressOpen(outW, outH, procW, procH)) {
+        std::lock_guard<std::mutex> l(gErrMu); gCreateErr = "StressOpen: " + p->LastError(); return 0;
+    }
+    return reinterpret_cast<jlong>(p.release());
+}
+
+FN(jdoubleArray, nativeStressRun)(JNIEnv* env, jclass, jlong h, jint frames) {
+    auto* p = reinterpret_cast<ff::Pipeline*>(h);
+    if (!p || frames <= 0) return nullptr;
+    std::vector<double> out(static_cast<size_t>(frames) * 2);
+    if (!p->StressRun(frames, out.data())) return nullptr;
+    jdoubleArray arr = env->NewDoubleArray(frames * 2);
+    if (arr) env->SetDoubleArrayRegion(arr, 0, frames * 2, out.data());
+    return arr;
+}
+
+FN(void, nativeStressClose)(JNIEnv*, jclass, jlong h) {
+    auto* p = reinterpret_cast<ff::Pipeline*>(h);
+    if (!p) return;
+    p->StressClose();
+    delete p;
+}

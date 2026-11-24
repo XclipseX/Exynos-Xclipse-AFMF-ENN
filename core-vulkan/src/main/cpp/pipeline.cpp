@@ -55,6 +55,7 @@ std::unique_ptr<Pipeline> Pipeline::Create(AAssetManager* assets, std::string* e
 Pipeline::~Pipeline() {
     if (dev_ != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(dev_);
+        DestroyImg(stressImg_[0]); DestroyImg(stressImg_[1]);
         DestroySwapchain();
         if (surface_ != VK_NULL_HANDLE) vkDestroySurfaceKHR(inst_, surface_, nullptr);
         DestroyAhbCache();
@@ -2022,6 +2023,131 @@ std::string Pipeline::BenchWarp(int outW, int outH, int procW, int procH, int it
     std::snprintf(buf, sizeof(buf), "Vulkan warp: gpu tv %.2f ms (tb %.2f, min %.2f), wall %.2f ms (proc %dx%d, %d lần)",
                   med, gpuSum / n, gpuMin, wallSum / n, procW, procH, n);
     return std::string(buf) + "\n  " + sum;
+}
+
+
+// Tải ảnh RGBA8 (đã MakeImage với SAMPLED|TRANSFER_DST) lên GPU, để layout SHADER_READ_ONLY.
+bool Pipeline::UploadRgba8(Img& im, const uint8_t* data) {
+    const VkDeviceSize sz = static_cast<VkDeviceSize>(im.w) * im.h * 4;
+    VkBuffer stg = VK_NULL_HANDLE; VkDeviceMemory mem = VK_NULL_HANDLE;
+    auto done = [&](bool ok) {
+        if (stg) vkDestroyBuffer(dev_, stg, nullptr);
+        if (mem) vkFreeMemory(dev_, mem, nullptr);
+        return ok;
+    };
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size = sz; bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT; bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(dev_, &bci, nullptr, &stg) != VK_SUCCESS) return done(false);
+    VkMemoryRequirements mr; vkGetBufferMemoryRequirements(dev_, stg, &mr);
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = FindMemType(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    void* map = nullptr;
+    if (mai.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(dev_, &mai, nullptr, &mem) != VK_SUCCESS ||
+        vkBindBufferMemory(dev_, stg, mem, 0) != VK_SUCCESS || vkMapMemory(dev_, mem, 0, sz, 0, &map) != VK_SUCCESS)
+        return done(false);
+    std::memcpy(map, data, static_cast<size_t>(sz));
+    vkUnmapMemory(dev_, mem);
+    VkCommandBuffer cb = cmdInit_;
+    vkResetCommandBuffer(cb, 0);
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cb, &bi);
+    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = im.img; b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    VkBufferImageCopy c{};
+    c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    c.imageExtent = {im.w, im.h, 1};
+    vkCmdCopyBufferToImage(cb, stg, im.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    vkEndCommandBuffer(cb);
+    return done(SubmitAndWait(cb, fenceA_));
+}
+
+bool Pipeline::StressOpen(int outW, int outH, int procW, int procH) {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (!tsValid_) return FailMsg("GPU không hỗ trợ timestamp");
+    procW_ = procW; procH_ = procH; flowW_ = procW / 2; flowH_ = procH / 2;
+    if (!EnsureAsync(static_cast<uint32_t>(outW), static_cast<uint32_t>(outH))) return false;
+    const VkImageUsageFlags up = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    std::vector<uint8_t> px(static_cast<size_t>(outW) * outH * 4);
+    for (int i = 0; i < 2; ++i) {
+        if (!MakeImage(stressImg_[i], outW, outH, VK_FORMAT_R8G8B8A8_UNORM, up)) return false;
+        bench::FillRgba8(px.data(), outW, outH, i == 1);
+        if (!UploadRgba8(stressImg_[i], px.data())) return FailMsg("Stress: lỗi tải ảnh");
+    }
+    // Flow NPU giả: chuyển động đều (kDx,kDy) tính theo pixel proc-res, mask 0.5.
+    const size_t plane = static_cast<size_t>(flowW_) * flowH_;
+    stressFlow_.assign(plane * 5, 0.f);
+    const float fx = 0.5f * bench::kDx * procW / static_cast<float>(outW);
+    const float fy = 0.5f * bench::kDy * procH / static_cast<float>(outH);
+    for (size_t i = 0; i < plane; ++i) {
+        stressFlow_[i] = -fx; stressFlow_[plane + i] = -fy;
+        stressFlow_[2 * plane + i] = fx; stressFlow_[3 * plane + i] = fy;
+        stressFlow_[4 * plane + i] = 0.5f;
+    }
+    stressOutW_ = outW; stressOutH_ = outH; stressFrame_ = 0;
+    return true;
+}
+
+bool Pipeline::StressRun(int frames, double* out) {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (!stressImg_[0].img || frames <= 0) return FailMsg("Stress chưa mở");
+    AFrame& F = af_[0];
+    PushConstants pc{};
+    pc.srcW = stressOutW_; pc.srcH = stressOutH_; pc.lowW = procW_; pc.lowH = procH_;
+    pc.flowW = flowW_; pc.flowH = flowH_; pc.outW = stressOutW_; pc.outH = stressOutH_;
+    pc.t = 0.5f; pc.mode = 1; pc.useNN = 1; pc.pad0 = 0;
+    pc.flowScaleX = 1.0f / static_cast<float>(procW_);
+    pc.flowScaleY = 1.0f / static_cast<float>(procH_);
+    pc.staticThr = 0.02f; pc.occThr = 0.14f;
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    for (int i = 0; i < frames; ++i, ++stressFrame_) {
+        const auto t0 = std::chrono::steady_clock::now();
+        // Giống khung thật: CPU chép flow NPU vào buffer, reset metrics, cập nhật descriptor theo cặp khung mới.
+        std::memcpy(F.nnFlow.ptr, stressFlow_.data(), stressFlow_.size() * sizeof(float));
+        std::memset(F.metrics.ptr, 0, 64);
+        const int a = static_cast<int>(stressFrame_ & 1);
+        UpdateDescriptorsFor(F, stressImg_[a].view, stressImg_[a ^ 1].view);
+        VkCommandBuffer cb = F.cb;
+        vkResetCommandBuffer(cb, 0);
+        vkBeginCommandBuffer(cb, &bi);
+        vkCmdResetQueryPool(cb, F.qp, 0, 8);
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, F.qp, 0);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl_, 0, 1, &F.ds, 0, nullptr);
+        vkCmdPushConstants(cb, pl_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pPre_);
+        vkCmdDispatch(cb, CeilDiv(procW_, 8), CeilDiv(procH_, 8), 1);
+        CmdMemBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pFlowPack_);
+        vkCmdDispatch(cb, CeilDiv(flowW_, 8), CeilDiv(flowH_, 8), 1);
+        CmdMemBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pWarp_);
+        vkCmdDispatch(cb, CeilDiv(stressOutW_, 8), CeilDiv(stressOutH_, 8), 1);
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, F.qp, 1);
+        vkEndCommandBuffer(cb);
+        if (!SubmitAndWait(cb, F.fence)) return false;
+        out[i] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        double ms[1] = {-1};
+        ReadTimestampsFrom(F.qp, 0, 2, ms);
+        out[frames + i] = ms[0];
+    }
+    return true;
+}
+
+void Pipeline::StressClose() {
+    std::lock_guard<std::mutex> lk(mu_);
+    vkDeviceWaitIdle(dev_);
+    DestroyImg(stressImg_[0]); DestroyImg(stressImg_[1]);
+    stressFlow_.clear(); stressFlow_.shrink_to_fit();
+    afOutW_ = 0;
 }
 
 }  // namespace ff

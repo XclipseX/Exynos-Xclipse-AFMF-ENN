@@ -104,7 +104,7 @@ class MainActivity : ComponentActivity() {
                     npu = {
                         NpuScreen(report = report, busy = diagBusy, onRun = ::runDiagnostics,
                             onCopy = ::copyReport, onShare = ::shareReport,
-                            gpuBench = gpuBench, gpuBusy = gpuBusy, onGpuBench = ::runGpuBench, onCopyGpu = ::copyGpuBench)
+                            gpuBench = gpuBench, gpuBusy = gpuBusy, onGpuBench = ::runGpuBench, onCopyGpu = ::copyGpuBench, onGpuStress = ::runGpuStress)
                     },
                     telemetry = {
                         val ts by TelemetryRecorder.state.collectAsState()
@@ -206,6 +206,22 @@ class MainActivity : ComponentActivity() {
             }
             val text = sb.toString().trim()
             runOnUiThread { gpuBench = text; gpuBusy = false }
+        }.start()
+    }
+
+    /** Stress A/B Vulkan vs OpenCL (~4 phút), giữ màn hình sáng trong lúc chạy. */
+    private fun runGpuStress() {
+        if (gpuBusy) return
+        gpuBusy = true; gpuBench = "Đang chuẩn bị…"
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        Thread {
+            val text = try {
+                GpuStress.run(this) { s -> runOnUiThread { gpuBench = s } }
+            } catch (t: Throwable) { "Stress lỗi: ${t.javaClass.simpleName}: ${t.message}" }
+            runOnUiThread {
+                gpuBench = text; gpuBusy = false
+                window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
         }.start()
     }
 
