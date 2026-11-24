@@ -5,6 +5,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write   # để tạo/cập nhật Release "nightly"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -65,3 +68,18 @@ jobs:
         with:
           name: fluidframes-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+
+      # Release "nightly": luôn là APK mới nhất của feat/initial-import, link tải cố định.
+      - name: Publish nightly release
+        if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/bisect-')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apk=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          cp "$apk" XclipseENN-SS.apk
+          short=$(git rev-parse --short HEAD)
+          msg=$(git log -1 --pretty=%s)
+          gh release delete test-148f7d8 -y --cleanup-tag 2>/dev/null || true
+          gh release create test-148f7d8 XclipseENN-SS.apk --prerelease --target "$GITHUB_SHA" \
+            --title "Bản so lỗi phóng to ($short)" \
+            --notes "Build #${GITHUB_RUN_NUMBER} · commit $short: $msg"
