@@ -14,7 +14,8 @@ internal object NativeBridge {
     @JvmStatic external fun nativeCreate(assets: AssetManager): Long
     @JvmStatic external fun nativeCreateError(): String
     @JvmStatic external fun nativeEnnPerf(mode: Int): String
-    @JvmStatic external fun nativeStressOpen(assets: AssetManager, outW: Int, outH: Int, procW: Int, procH: Int): Long
+    @JvmStatic external fun nativeStressOpen(assets: AssetManager, outW: Int, outH: Int, procW: Int, procH: Int, prio: Int): Long
+    @JvmStatic external fun nativeStressPrio(handle: Long): String
     @JvmStatic external fun nativeStressRun(handle: Long, frames: Int): DoubleArray?
     @JvmStatic external fun nativeStressClose(handle: Long)
     @JvmStatic external fun nativeBenchWarp(assets: AssetManager, outW: Int, outH: Int, procW: Int, procH: Int, iters: Int): String

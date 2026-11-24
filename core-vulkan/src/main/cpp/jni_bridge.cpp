@@ -186,10 +186,12 @@ FN(jstring, nativeBenchWarp)(JNIEnv* env, jclass, jobject assetManager, jint out
 }
 
 // Stress A/B Vulkan: mở một Pipeline riêng, chạy khung liên tục theo từng đợt (Kotlin xen kẽ với OpenCL).
-FN(jlong, nativeStressOpen)(JNIEnv* env, jclass, jobject assetManager, jint outW, jint outH, jint procW, jint procH) {
+FN(jlong, nativeStressOpen)(JNIEnv* env, jclass, jobject assetManager, jint outW, jint outH, jint procW, jint procH, jint prio) {
     AAssetManager* am = AAssetManager_fromJava(env, assetManager);
     std::string err;
+    ff::Pipeline::SetRequestedPriority(prio);
     auto p = ff::Pipeline::Create(am, &err);
+    ff::Pipeline::SetRequestedPriority(0);
     if (!p) { std::lock_guard<std::mutex> l(gErrMu); gCreateErr = err; return 0; }
     if (!p->StressOpen(outW, outH, procW, procH)) {
         std::lock_guard<std::mutex> l(gErrMu); gCreateErr = "StressOpen: " + p->LastError(); return 0;
@@ -205,6 +207,11 @@ FN(jdoubleArray, nativeStressRun)(JNIEnv* env, jclass, jlong h, jint frames) {
     jdoubleArray arr = env->NewDoubleArray(frames * 2);
     if (arr) env->SetDoubleArrayRegion(arr, 0, frames * 2, out.data());
     return arr;
+}
+
+FN(jstring, nativeStressPrio)(JNIEnv* env, jclass, jlong h) {
+    auto* p = reinterpret_cast<ff::Pipeline*>(h);
+    return env->NewStringUTF(p ? p->PriorityInfo().c_str() : "");
 }
 
 FN(void, nativeStressClose)(JNIEnv*, jclass, jlong h) {

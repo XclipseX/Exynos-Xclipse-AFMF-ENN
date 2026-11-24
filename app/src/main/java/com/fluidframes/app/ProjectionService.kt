@@ -150,7 +150,7 @@ class ProjectionService : Service() {
         // Đơn vị dòng điện khác nhau theo máy (µA hay mA): giá trị > 20000 coi là µA.
         val ma = if (kotlin.math.abs(ua) > 20000) ua / 1000f else ua.toFloat()
         val w = kotlin.math.abs(ma) * mv / 1_000_000f
-        com.fluidframes.overlay.HudOverlay.row("Pin", "%d%% %.1f°C".format(lvl, tmp)) + "\n" + com.fluidframes.overlay.HudOverlay.row("Công suất", "%.2f W".format(w), if (w < 4f) com.fluidframes.overlay.HudOverlay.G else if (w < 7f) com.fluidframes.overlay.HudOverlay.Y else com.fluidframes.overlay.HudOverlay.R)
+        com.fluidframes.overlay.HudOverlay.row("Pin", "%d%% %.1f°C".format(lvl, tmp) + com.fluidframes.telemetry.ApTemp.read().let { if (it.isNaN()) "" else " · AP %.1f°C".format(it) }) + "\n" + com.fluidframes.overlay.HudOverlay.row("Công suất", "%.2f W".format(w), if (w < 4f) com.fluidframes.overlay.HudOverlay.G else if (w < 7f) com.fluidframes.overlay.HudOverlay.Y else com.fluidframes.overlay.HudOverlay.R)
     } catch (_: Throwable) { "" }
 
     private fun startRendering(): Boolean {

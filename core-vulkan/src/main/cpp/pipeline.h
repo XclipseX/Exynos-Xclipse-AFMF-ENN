@@ -44,6 +44,10 @@ enum BeginResult {
 class Pipeline {
 public:
     static std::unique_ptr<Pipeline> Create(AAssetManager* assets, std::string* err);
+    // Ưu tiên hàng đợi GPU cho các Pipeline tạo SAU khi đặt: 0 thường, 1 cao (HIGH), 2 thời gian thực (REALTIME).
+    static void SetRequestedPriority(int p);
+    // Kết quả xin ưu tiên của pipeline này (chữ, để báo cáo).
+    std::string PriorityInfo() const { return prioInfo_; }
     ~Pipeline();
 
     // Nhận 1 tham chiếu ANativeWindow (đã acquire); nullptr = hủy swapchain.
@@ -240,6 +244,8 @@ private:
     int srInZp_ = -128, srOutZp_ = 0;
     bool srReady_ = false;
     bool SrRecord(AHardwareBuffer* lr, VkPipeline pipe, bool post, int slot);
+
+    std::string prioInfo_ = "thường";
 
     // Stress
     Img stressImg_[2];

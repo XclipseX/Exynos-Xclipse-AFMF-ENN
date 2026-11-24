@@ -97,9 +97,11 @@ class NativePipeline private constructor(private var handle: Long) {
 
     companion object {
         /** Stress A/B Vulkan. Trả 0 nếu lỗi (xem stressError()). */
-        fun stressOpen(context: Context, outW: Int, outH: Int, procW: Int, procH: Int): Long = try {
-            NativeBridge.nativeStressOpen(context.assets, outW, outH, procW, procH)
+        /** [prio]: 0 thường, 1 HIGH, 2 REALTIME (VK_KHR_global_priority). */
+        fun stressOpen(context: Context, outW: Int, outH: Int, procW: Int, procH: Int, prio: Int = 0): Long = try {
+            NativeBridge.nativeStressOpen(context.assets, outW, outH, procW, procH, prio)
         } catch (t: Throwable) { 0L }
+        fun stressPrio(h: Long): String = try { NativeBridge.nativeStressPrio(h) } catch (t: Throwable) { "" }
         fun stressError(): String = try { NativeBridge.nativeCreateError() } catch (t: Throwable) { t.toString() }
         /** [0,frames) wall ms, [frames,2*frames) GPU ms mỗi khung; null nếu lỗi. */
         fun stressRun(h: Long, frames: Int): DoubleArray? = try { NativeBridge.nativeStressRun(h, frames) } catch (t: Throwable) { null }

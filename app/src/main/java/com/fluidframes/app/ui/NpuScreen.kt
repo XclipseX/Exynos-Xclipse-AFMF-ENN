@@ -97,8 +97,8 @@ fun NpuScreen(
                 Spacer(Modifier.height(12.dp))
                 PillButton(if (gpuBusy) "Đang đo…" else "Đo OpenCL vs Vulkan", onGpuBench, enabled = !gpuBusy && !busy)
                 Spacer(Modifier.height(10.dp))
-                PillButton("Stress test A/B (~4 phút)", onGpuStress, primary = false, enabled = !gpuBusy && !busy)
-                Text("Chạy hết sức Vulkan / OpenCL chép / OpenCL dma_buf xen kẽ 15 giây mỗi đoạn. Rút sạc để đo điện đúng.",
+                PillButton("Stress test A/B toàn diện (~2 phút)", onGpuStress, primary = false, enabled = !gpuBusy && !busy)
+                Text("Vulkan thường / ưu tiên cao / OpenCL dma_buf / OpenCL chép, mỗi bản chạy hết sức và 120 fps cố định; đo trễ, điện thêm so với nền, nhiệt AP, xung GPU. Rút sạc để đo điện đúng.",
                     style = MaterialTheme.typography.bodyMedium, color = FF.c.muted)
                 if (gpuBench != null) {
                     Spacer(Modifier.height(12.dp))

@@ -3,6 +3,7 @@
 #include <android/log.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <thread>
 #include <cstdio>
@@ -36,12 +37,15 @@ constexpr uint64_t kAcquireTimeoutNs = 100000000ull;
 constexpr int kBindingCount = 12;
 
 uint32_t CeilDiv(int a, int b) { return static_cast<uint32_t>((a + b - 1) / b); }
+std::atomic<int> gRequestedPriority{0};
 
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------
 // Vòng đời
 // ---------------------------------------------------------------------------------------------
+
+void Pipeline::SetRequestedPriority(int p) { gRequestedPriority.store(p); }
 
 std::unique_ptr<Pipeline> Pipeline::Create(AAssetManager* assets, std::string* err) {
     std::unique_ptr<Pipeline> p(new Pipeline());
@@ -192,9 +196,41 @@ bool Pipeline::Init(AAssetManager* assets) {
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
-    dci.enabledExtensionCount = static_cast<uint32_t>(sizeof(devExts) / sizeof(devExts[0]));
-    dci.ppEnabledExtensionNames = devExts;
-    VK_TRY(vkCreateDevice(pd_, &dci, nullptr, &dev_));
+    std::vector<const char*> exts(devExts, devExts + sizeof(devExts) / sizeof(devExts[0]));
+    dci.enabledExtensionCount = static_cast<uint32_t>(exts.size());
+    dci.ppEnabledExtensionNames = exts.data();
+
+    // Ưu tiên hàng đợi (VK_KHR/EXT_global_priority): tự khai struct để không phụ thuộc phiên bản header NDK.
+    struct GlobalPrioInfo { VkStructureType sType; const void* pNext; int32_t globalPriority; };
+    GlobalPrioInfo gp{static_cast<VkStructureType>(1000174000), nullptr, 0};
+    const int want = gRequestedPriority.load();
+    if (want > 0) {
+        const char* prioExt = nullptr;
+        for (const auto& e : eprops) {
+            if (strcmp(e.extensionName, "VK_KHR_global_priority") == 0) { prioExt = "VK_KHR_global_priority"; break; }
+            if (strcmp(e.extensionName, "VK_EXT_global_priority") == 0) prioExt = "VK_EXT_global_priority";
+        }
+        if (!prioExt) {
+            prioInfo_ = "driver không có global_priority";
+        } else {
+            gp.globalPriority = want >= 2 ? 1024 : 512;   // REALTIME : HIGH
+            qci.pNext = &gp;
+            exts.push_back(prioExt);
+            dci.enabledExtensionCount = static_cast<uint32_t>(exts.size());
+            dci.ppEnabledExtensionNames = exts.data();
+            VkResult r = vkCreateDevice(pd_, &dci, nullptr, &dev_);
+            if (r == VK_SUCCESS) {
+                prioInfo_ = std::string(want >= 2 ? "REALTIME" : "HIGH") + " qua " + prioExt + " (được cấp)";
+            } else {
+                prioInfo_ = std::string("xin ") + (want >= 2 ? "REALTIME" : "HIGH") + " bị từ chối (VkResult " + std::to_string(r) + ")";
+                dev_ = VK_NULL_HANDLE;
+                qci.pNext = nullptr;
+                exts.pop_back();
+                dci.enabledExtensionCount = static_cast<uint32_t>(exts.size());
+            }
+        }
+    }
+    if (dev_ == VK_NULL_HANDLE) VK_TRY(vkCreateDevice(pd_, &dci, nullptr, &dev_));
     vkGetDeviceQueue(dev_, qf_, 0, &queue_);
 
     pfnGetAhbProps_ = reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(

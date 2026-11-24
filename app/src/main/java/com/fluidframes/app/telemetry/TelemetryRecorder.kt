@@ -262,6 +262,7 @@ object TelemetryRecorder {
             val lvl = bi.getIntExtra(BatteryManager.EXTRA_LEVEL, -1); val sc = bi.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
             if (lvl >= 0) m["pin_pct"] = lvl * 100.0 / sc
             m["pin_nhiet_C"] = bi.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) / 10.0
+            com.fluidframes.telemetry.ApTemp.read().let { if (!it.isNaN()) m["ap_nhiet_C"] = it.toDouble() }
             m["pin_mV"] = bi.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)
             m["dang_sac"] = if (bi.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0) 1 else 0
         }
