@@ -174,3 +174,13 @@ FN(jboolean, nativeSrPost)(JNIEnv* env, jclass, jlong h, jobject lr, jobject tok
     AHardwareBuffer* t = AHardwareBuffer_fromHardwareBuffer(env, token);
     return (a && t && P(h)->SrPost(a, t, slot)) ? JNI_TRUE : JNI_FALSE;
 }
+
+// Bench warp Vulkan trên một Pipeline tạm (không đụng pipeline đang chạy).
+FN(jstring, nativeBenchWarp)(JNIEnv* env, jclass, jobject assetManager, jint outW, jint outH, jint procW, jint procH, jint iters) {
+    AAssetManager* am = AAssetManager_fromJava(env, assetManager);
+    std::string err;
+    auto p = ff::Pipeline::Create(am, &err);
+    if (!p) return env->NewStringUTF(("Vulkan warp: không tạo được pipeline: " + err).c_str());
+    std::string r = p->BenchWarp(outW, outH, procW, procH, iters);
+    return env->NewStringUTF(r.c_str());
+}

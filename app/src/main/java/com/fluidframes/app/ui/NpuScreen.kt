@@ -27,6 +27,9 @@ fun NpuScreen(
     onRun: () -> Unit,
     onCopy: () -> Unit,
     onShare: () -> Unit,
+    gpuBench: String? = null,
+    gpuBusy: Boolean = false,
+    onGpuBench: () -> Unit = {},
 ) {
     Column(Modifier.fillMaxWidth()) {
         LargeHeader("NPU Exynos", "Kiểm tra ENN, nạp model và đo tốc độ", minHeight = 170.dp)
@@ -83,6 +86,17 @@ fun NpuScreen(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     PillButton("Sao chép", onCopy, primary = false, modifier = Modifier.weight(1f))
                     PillButton("Chia sẻ", onShare, primary = false, modifier = Modifier.weight(1f))
+                }
+            }
+            FFCard {
+                SectionTitle("GPU: OpenCL so với Vulkan")
+                Text("Chạy cùng một bước ghép khung (warp) trên cùng dữ liệu bằng OpenCL và Vulkan, kèm tên driver OpenCL.",
+                    style = MaterialTheme.typography.bodyMedium, color = FF.c.muted)
+                Spacer(Modifier.height(12.dp))
+                PillButton(if (gpuBusy) "Đang đo…" else "Đo OpenCL vs Vulkan", onGpuBench, enabled = !gpuBusy && !busy)
+                if (gpuBench != null) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(gpuBench, style = MaterialTheme.typography.bodyMedium, color = FF.c.text)
                 }
             }
             FFCard {

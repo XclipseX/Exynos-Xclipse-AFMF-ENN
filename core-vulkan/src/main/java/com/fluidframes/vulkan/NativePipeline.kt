@@ -96,6 +96,11 @@ class NativePipeline private constructor(private var handle: Long) {
     }
 
     companion object {
+        /** Đo warp.comp (Vulkan) trên dữ liệu tổng hợp, cùng dữ liệu với ClBridge.benchWarp. */
+        fun benchWarp(context: Context, outW: Int, outH: Int, procW: Int, procH: Int, iters: Int): String = try {
+            NativeBridge.nativeBenchWarp(context.assets, outW, outH, procW, procH, iters)
+        } catch (t: Throwable) { "Vulkan warp: ${t.javaClass.simpleName}: ${t.message}" }
+
         /** Trả về Result để UI hiển thị lỗi Vulkan (thiếu extension, thiếu shader...). */
         fun create(context: Context): Result<NativePipeline> {
             val h = try {

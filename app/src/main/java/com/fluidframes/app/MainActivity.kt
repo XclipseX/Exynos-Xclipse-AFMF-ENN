@@ -46,6 +46,8 @@ class MainActivity : ComponentActivity() {
     private var message by mutableStateOf("")
     private var report by mutableStateOf<NpuDiagnostics.Report?>(null)
     private var diagBusy by mutableStateOf(false)
+    private var gpuBench by mutableStateOf<String?>(null)
+    private var gpuBusy by mutableStateOf(false)
     private val apps: List<AppEntry> by lazy {
         val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         packageManager.queryIntentActivities(i, 0)
@@ -101,7 +103,8 @@ class MainActivity : ComponentActivity() {
                     },
                     npu = {
                         NpuScreen(report = report, busy = diagBusy, onRun = ::runDiagnostics,
-                            onCopy = ::copyReport, onShare = ::shareReport)
+                            onCopy = ::copyReport, onShare = ::shareReport,
+                            gpuBench = gpuBench, gpuBusy = gpuBusy, onGpuBench = ::runGpuBench)
                     },
                     telemetry = {
                         val ts by TelemetryRecorder.state.collectAsState()
@@ -183,8 +186,25 @@ class MainActivity : ComponentActivity() {
         }.start()
     }
 
+    /** Đo warp OpenCL vs Vulkan ở 2340x1080 (proc 180p và 320p), kèm thông tin driver OpenCL. */
+    private fun runGpuBench() {
+        if (gpuBusy) return
+        gpuBusy = true; gpuBench = null
+        Thread {
+            val sb = StringBuilder()
+            sb.append(try { com.fluidframes.vulkan.ClBridge.probe() } catch (t: Throwable) { "OpenCL probe: ${t.javaClass.simpleName}: ${t.message}" }).append("\n\n")
+            for (ls in intArrayOf(180, 320)) {
+                val (pw, ph) = com.fluidframes.vulkan.NativePipeline.procSize(ls, 2340, 1080)
+                sb.append(com.fluidframes.vulkan.NativePipeline.benchWarp(this, 2340, 1080, pw, ph, 50)).append('\n')
+                sb.append(try { com.fluidframes.vulkan.ClBridge.benchWarp(this, 2340, 1080, pw, ph, 50) } catch (t: Throwable) { "OpenCL warp: ${t.javaClass.simpleName}: ${t.message}" }).append("\n\n")
+            }
+            val text = sb.toString().trim()
+            runOnUiThread { gpuBench = text; gpuBusy = false }
+        }.start()
+    }
+
     private fun copyReport() {
-        val text = report?.toText() ?: return
+        val text = listOfNotNull(report?.toText(), gpuBench).joinToString("\n\n").ifBlank { return }
         getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Xclipse ENN-SS NPU", text))
         Toast.makeText(this, "Đã sao chép báo cáo", Toast.LENGTH_SHORT).show()
     }

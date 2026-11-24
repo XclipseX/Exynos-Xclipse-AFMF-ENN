@@ -99,6 +99,10 @@ public:
     void GetStats(float* out, int n);
     std::string LastError();
 
+    // Đo warp.comp trên dữ liệu tổng hợp (bench_pattern.h), không cần swapchain/AHardwareBuffer.
+    // Gọi trên một Pipeline riêng (không dùng chung với pipeline đang chạy game).
+    std::string BenchWarp(int outW, int outH, int procW, int procH, int iters);
+
 private:
     struct Img {
         VkImage img = VK_NULL_HANDLE;

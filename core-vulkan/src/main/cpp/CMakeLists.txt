@@ -6,7 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(fluidframes_native SHARED
     jni_bridge.cpp
-    pipeline.cpp)
+    pipeline.cpp
+    cl/cl_loader.cpp
+    cl/cl_probe.cpp
+    cl/cl_bench.cpp
+    cl/jni_cl.cpp)
 
 target_compile_definitions(fluidframes_native PRIVATE VK_USE_PLATFORM_ANDROID_KHR=1)
 target_compile_options(fluidframes_native PRIVATE -Wall -Wextra -Wno-unused-parameter)

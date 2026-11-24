@@ -1858,3 +1858,130 @@ bool Pipeline::SrPost(AHardwareBuffer* lr, AHardwareBuffer* token, int slot) {
 }
 
 }  // namespace ff
+
+// ---------------------------------------------------------------------------------------------
+// Bench warp Vulkan: cùng dữ liệu và push constant như bench OpenCL (cl/cl_bench.cpp) để so ms công bằng.
+#include "bench_pattern.h"
+
+namespace ff {
+
+std::string Pipeline::BenchWarp(int outW, int outH, int procW, int procH, int iters) {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (!tsValid_) return "Vulkan warp: GPU không hỗ trợ timestamp";
+    procW_ = procW; procH_ = procH; flowW_ = procW / 2; flowH_ = procH / 2;
+    if (!EnsureAsync(static_cast<uint32_t>(outW), static_cast<uint32_t>(outH))) return "Vulkan warp: lỗi tạo tài nguyên: " + LastError();
+
+    const VkFormat f8 = VK_FORMAT_R8G8B8A8_UNORM, f16 = VK_FORMAT_R16G16B16A16_SFLOAT;
+    const VkImageUsageFlags up = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    Img prev, cur, flow, aux;
+    VkBuffer stg = VK_NULL_HANDLE; VkDeviceMemory stgMem = VK_NULL_HANDLE;
+    std::string result;
+    auto cleanup = [&]() {
+        vkDeviceWaitIdle(dev_);
+        DestroyImg(prev); DestroyImg(cur); DestroyImg(flow); DestroyImg(aux);
+        if (stg) vkDestroyBuffer(dev_, stg, nullptr);
+        if (stgMem) vkFreeMemory(dev_, stgMem, nullptr);
+    };
+    if (!MakeImage(prev, outW, outH, f8, up) || !MakeImage(cur, outW, outH, f8, up) ||
+        !MakeImage(flow, flowW_, flowH_, f16, up | VK_IMAGE_USAGE_STORAGE_BIT) ||
+        !MakeImage(aux, flowW_, flowH_, f16, up | VK_IMAGE_USAGE_STORAGE_BIT)) {
+        cleanup(); return "Vulkan warp: lỗi tạo ảnh: " + LastError();
+    }
+
+    // Staging: prev | cur | flow | aux
+    const VkDeviceSize szF = static_cast<VkDeviceSize>(outW) * outH * 4;
+    const VkDeviceSize szL = static_cast<VkDeviceSize>(flowW_) * flowH_ * 8;
+    const VkDeviceSize total = szF * 2 + szL * 2;
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size = total; bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT; bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(dev_, &bci, nullptr, &stg) != VK_SUCCESS) { cleanup(); return "Vulkan warp: lỗi tạo staging"; }
+    VkMemoryRequirements mr; vkGetBufferMemoryRequirements(dev_, stg, &mr);
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = FindMemType(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    void* map = nullptr;
+    if (mai.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(dev_, &mai, nullptr, &stgMem) != VK_SUCCESS ||
+        vkBindBufferMemory(dev_, stg, stgMem, 0) != VK_SUCCESS || vkMapMemory(dev_, stgMem, 0, total, 0, &map) != VK_SUCCESS) {
+        cleanup(); return "Vulkan warp: lỗi bộ nhớ staging";
+    }
+    auto* base = static_cast<uint8_t*>(map);
+    bench::FillRgba8(base, outW, outH, false);
+    bench::FillRgba8(base + szF, outW, outH, true);
+    bench::FillFlowRgba16f(reinterpret_cast<uint16_t*>(base + szF * 2), flowW_, flowH_, outW, outH);
+    bench::FillAuxRgba16f(reinterpret_cast<uint16_t*>(base + szF * 2 + szL), flowW_, flowH_);
+    vkUnmapMemory(dev_, stgMem);
+    std::memset(af_[0].metrics.ptr, 0, static_cast<size_t>(af_[0].metrics.size));
+
+    // Upload + chuyển layout: prev/cur -> READ_ONLY, flow/aux -> GENERAL (giống descriptor thật).
+    VkCommandBuffer cb = cmdInit_;
+    vkResetCommandBuffer(cb, 0);
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cb, &bi);
+    Img* imgs[4] = {&prev, &cur, &flow, &aux};
+    const VkDeviceSize offs[4] = {0, szF, szF * 2, szF * 2 + szL};
+    const VkImageLayout finalL[4] = {VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL};
+    for (int i = 0; i < 4; ++i) {
+        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = imgs[i]->img; b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+        VkBufferImageCopy c{};
+        c.bufferOffset = offs[i];
+        c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        c.imageExtent = {imgs[i]->w, imgs[i]->h, 1};
+        vkCmdCopyBufferToImage(cb, stg, imgs[i]->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; b.newLayout = finalL[i];
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    }
+    vkEndCommandBuffer(cb);
+    if (!SubmitAndWait(cb, fenceA_)) { cleanup(); return "Vulkan warp: lỗi upload: " + LastError(); }
+
+    // Descriptor của khung 0 nhưng flow/aux trỏ vào ảnh bench.
+    AFrame bf = af_[0];
+    bf.flow = flow; bf.aux = aux;
+    UpdateDescriptorsFor(bf, prev.view, cur.view);
+
+    PushConstants pc{};
+    pc.srcW = outW; pc.srcH = outH; pc.lowW = procW_; pc.lowH = procH_;
+    pc.flowW = flowW_; pc.flowH = flowH_; pc.outW = outW; pc.outH = outH;
+    pc.t = 0.5f; pc.mode = 1; pc.useNN = 1; pc.pad0 = 0;
+    pc.flowScaleX = 1.0f / static_cast<float>(procW_);
+    pc.flowScaleY = 1.0f / static_cast<float>(procH_);
+    pc.staticThr = 0.02f; pc.occThr = 0.14f;
+
+    VkCommandBuffer wcb = af_[0].cb;
+    VkQueryPool qp = af_[0].qp;
+    double gpuSum = 0, wallSum = 0; int n = 0;
+    for (int it = 0; it < iters + 5; ++it) {
+        vkResetCommandBuffer(wcb, 0);
+        vkBeginCommandBuffer(wcb, &bi);
+        vkCmdResetQueryPool(wcb, qp, 0, 8);
+        vkCmdBindDescriptorSets(wcb, VK_PIPELINE_BIND_POINT_COMPUTE, pl_, 0, 1, &af_[0].ds, 0, nullptr);
+        vkCmdPushConstants(wcb, pl_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
+        vkCmdBindPipeline(wcb, VK_PIPELINE_BIND_POINT_COMPUTE, pWarp_);
+        vkCmdWriteTimestamp(wcb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, qp, 0);
+        vkCmdDispatch(wcb, CeilDiv(outW, 8), CeilDiv(outH, 8), 1);
+        vkCmdWriteTimestamp(wcb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, qp, 1);
+        vkEndCommandBuffer(wcb);
+        const auto t0 = std::chrono::steady_clock::now();
+        if (!SubmitAndWait(wcb, af_[0].fence)) { cleanup(); return "Vulkan warp: lỗi chạy: " + LastError(); }
+        const double wall = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        double ms[1] = {0};
+        if (it >= 5 && ReadTimestampsFrom(qp, 0, 2, ms)) { gpuSum += ms[0]; wallSum += wall; ++n; }
+    }
+    cleanup();
+    // Ép EnsureAsync tạo lại lần sau (descriptor khung 0 đang trỏ ảnh đã huỷ).
+    afOutW_ = 0;
+    if (n == 0) return "Vulkan warp: không đọc được timestamp";
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "Vulkan warp: gpu %.2f ms, wall %.2f ms (%dx%d, proc %dx%d, %d lần)",
+                  gpuSum / n, wallSum / n, outW, outH, procW, procH, n);
+    return buf;
+}
+
+}  // namespace ff
