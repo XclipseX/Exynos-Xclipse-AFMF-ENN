@@ -19,6 +19,8 @@ data class FluidSettings(
     val alwaysInterp: Boolean = false,
     /** Chế độ điện NPU: 0 mặc định LiteRT (tối đa) | 1 cân bằng | 2 tiết kiệm. */
     val npuPower: Int = 0,
+    /** API tính toán GPU cho đường NPU: 0 Vulkan | 1 OpenCL (thử nghiệm, qua dma_buf). */
+    val gpuApi: Int = 0,
     /** Chế độ riêng, KHÔNG chạy cùng nội suy: 0 = nội suy khung hình | 1 = Upscale ×2 (chụp nửa độ phân giải, NPU gấp đôi) | 2 = Upscale ×1 (làm nét, giữ độ phân giải). */
     val upscale: Int = 0,
     val npuPrecision: Int = 0,   // 0 tự động (INT8>FP16>FP32) | 1 INT8 | 2 FP16 | 3 FP32
@@ -76,6 +78,7 @@ class SettingsStore(context: Context) {
         alwaysInterp = prefs.getBoolean("always", false),
         npuPrecision = prefs.getInt("npuprec", 0),
         npuPower = prefs.getInt("npupow", 0),
+        gpuApi = prefs.getInt("gpuapi", 0),
         upscale = prefs.getInt("upscale", 0),
         sensitivity = prefs.getInt("sens", 1),
         hudProtect = prefs.getBoolean("hudprot", true),
@@ -99,6 +102,7 @@ class SettingsStore(context: Context) {
             .putBoolean("always", s.alwaysInterp)
             .putInt("npuprec", s.npuPrecision)
             .putInt("npupow", s.npuPower)
+            .putInt("gpuapi", s.gpuApi)
             .putInt("upscale", s.upscale)
             .putInt("sens", s.sensitivity)
             .putBoolean("hudprot", s.hudProtect)

@@ -155,6 +155,10 @@ class MenuOverlay(
             col.addView(ui.segmented(listOf("Gốc", "1920", "1560", "1280"), outOpts.indexOf(settings.outLongSide).coerceAtLeast(0)) {
                 settings = settings.copy(outLongSide = outOpts[it]); onChange(settings)
             })
+            col.addView(ui.caption("Tính toán GPU (OpenCL: trễ thấp hơn, tốn điện hơn; chỉ áp dụng khi flow chạy NPU)"))
+            col.addView(ui.segmented(listOf("Vulkan", "OpenCL (thử)"), settings.gpuApi.coerceIn(0, 1)) {
+                settings = settings.copy(gpuApi = it); onChange(settings)
+            })
             col.addView(ui.caption("Điện NPU (Tiết kiệm = hạ xung NPU, ít điện hơn, hơi chậm hơn)"))
             col.addView(ui.segmented(listOf("Mặc định", "Cân bằng", "Tiết kiệm"), settings.npuPower.coerceIn(0, 2)) {
                 settings = settings.copy(npuPower = it); onChange(settings)

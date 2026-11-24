@@ -121,6 +121,7 @@ class FramePipeline(
         if (on(8)) lines += r("Backend", backendLabel + if (overlayShown) "" else " (overlay tắt)", if (backendLabel.contains("NPU", true)) G else "")
         if (on(8) && srNote.isNotEmpty()) lines += r("Upscale", srNote, if (srActive) G else Y)
         if (on(8) && ennPerfNote.isNotEmpty()) lines += r("Điện NPU", ennPerfNote, "")
+        if (on(8)) lines += r("GPU API", apiNote.take(70), if (apiNote.startsWith("OpenCL ·")) G else if (apiNote.contains("lỗi") || apiNote.startsWith("Không")) R else "")
         if (on(16) && lastMode == Mode.FLOW_NN) (backend as? com.fluidframes.enn.LiteRtBackend)?.let {
             lines += r("NPU vào/chạy/ra ms", "%.1f/%.1f/%.1f".format(it.copyInMs, it.runMs, it.copyOutMs), if (it.runMs + it.copyInMs + it.copyOutMs < 1000f / src.coerceAtLeast(20f)) G else Y)
         }
@@ -166,6 +167,7 @@ class FramePipeline(
             "mode" to lastMode.name,
             "tier" to tierLabel(lastTier),
             "backend" to backendLabel,
+            "gpu_api" to (if (apiNote.startsWith("OpenCL ·")) "opencl" else "vulkan"),
             "overlay_hien" to if (overlayShown) 1 else 0,
             "man_hz_hien_tai" to curHz().toDouble(),
             "stalls" to stalls,
@@ -421,6 +423,18 @@ class FramePipeline(
         }
     }
 
+    private var appliedApi = -1
+    @Volatile private var apiNote = "Vulkan"
+    /** Đổi API tính toán GPU (Vulkan / OpenCL thử nghiệm). Trạng thái thật lấy từ native (có thể tự về Vulkan khi lỗi). */
+    private fun applyGpuApi(st: com.fluidframes.overlay.FluidSettings) {
+        if (appliedApi != st.gpuApi) {
+            appliedApi = st.gpuApi
+            apiNote = native.setClMode(st.gpuApi == 1)
+        } else if (st.gpuApi == 1) {
+            apiNote = native.clInfo()
+        }
+    }
+
     private var appliedPow = -1
     @Volatile private var ennPerfNote = ""
     /** Hạ/đặt chế độ điện NPU sau khi model đã nạp (dispatch tự ép tối đa mỗi lần khởi tạo). */
@@ -631,6 +645,7 @@ class FramePipeline(
         val st = settings()
         applyTune(st)
         applyEnnPower(st)
+        applyGpuApi(st)
         if (st.upscale == 0 && (sr != null || srNote.isNotEmpty())) { srDrain(); srStop() }
         if (st.npuPrecision != wantPrec) { wantPrec = st.npuPrecision; failLong = 0 }
         // Chỉ nội suy app đã bật. Chưa nhận ra app (chưa bật Trợ năng) thì cứ nội suy như cũ.

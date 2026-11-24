@@ -13,6 +13,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace ffcl { class ClEngine; }
+
 namespace ff {
 
 // Phải khớp khối push_constant trong mọi shader (64 byte).
@@ -48,6 +50,11 @@ public:
     static void SetRequestedPriority(int p);
     // Kết quả xin ưu tiên của pipeline này (chữ, để báo cáo).
     std::string PriorityInfo() const { return prioInfo_; }
+
+    // Chế độ tính toán OpenCL (thử nghiệm) cho đường NPU: flowpack + warp chạy trên OpenCL qua dma_buf.
+    std::string SetClMode(bool on);
+    std::string ClInfo();
+    bool ClActive();
     ~Pipeline();
 
     // Nhận 1 tham chiếu ANativeWindow (đã acquire); nullptr = hủy swapchain.
@@ -246,6 +253,30 @@ private:
     bool SrRecord(AHardwareBuffer* lr, VkPipeline pipe, bool post, int slot);
 
     std::string prioInfo_ = "thường";
+
+    // OpenCL (thử nghiệm)
+    struct ExtBuf { VkBuffer buf = VK_NULL_HANDLE; VkDeviceMemory mem = VK_NULL_HANDLE; int fd = -1; VkDeviceSize size = 0; };
+    AAssetManager* assets_ = nullptr;
+    bool dmaBufExport_ = false;
+    PFN_vkGetMemoryFdKHR pfnGetMemoryFd_ = nullptr;
+    bool clMode_ = false;
+    std::unique_ptr<ffcl::ClEngine> cl_;
+    ExtBuf clPrev_[3], clCur_[3], clOut_[3];
+    VkDescriptorSet dsPack_[3] = {};
+    VkPipeline pPack_ = VK_NULL_HANDLE;
+    uint32_t clW_ = 0, clH_ = 0;
+    int clProcW_ = 0, clProcH_ = 0;
+    bool clSlotOk_[3] = {};
+    bool clPacked_[3] = {};
+    double clMsSlot_[3] = {-1, -1, -1};
+    int clErrStreak_ = 0;
+    std::string clInfo_ = "Vulkan";
+    std::mutex clInfoMu_;
+    bool MakeExtBuf(ExtBuf& b, VkDeviceSize size);
+    void DestroyExtBuf(ExtBuf& b);
+    bool EnsureClSlots();
+    void SetClInfo(const std::string& s);
+    void CmdExtBarrier(VkCommandBuffer cb, VkBuffer buf, bool acquire, VkAccessFlags access, VkPipelineStageFlags stage);
 
     // Stress
     Img stressImg_[2];

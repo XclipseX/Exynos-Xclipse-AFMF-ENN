@@ -27,6 +27,10 @@ class NativePipeline private constructor(private var handle: Long) {
     /** Chế độ điện NPU Samsung: 0 tiết kiệm, 4 cân bằng, 7 tối đa. Trả về kết quả để hiện trên HUD. */
     fun ennPerf(mode: Int): String = try { NativeBridge.nativeEnnPerf(mode) } catch (t: Throwable) { "lỗi: ${t.javaClass.simpleName}" }
 
+    /** Bật/tắt tính toán OpenCL (thử nghiệm) cho đường NPU; trả trạng thái để hiện HUD. */
+    fun setClMode(on: Boolean): String = try { NativeBridge.nativeSetClMode(handle, on) } catch (t: Throwable) { "lỗi: ${t.javaClass.simpleName}" }
+    fun clInfo(): String = try { NativeBridge.nativeClInfo(handle) } catch (t: Throwable) { "" }
+
     fun setSurface(surface: Surface?): Boolean = NativeBridge.nativeSetSurface(handle, surface)
 
     fun setTune(staticThr: Float, occThr: Float, flags: Int) = NativeBridge.nativeSetTune(handle, staticThr, occThr, flags)

@@ -11,6 +11,7 @@ add_library(fluidframes_native SHARED
     cl/cl_probe.cpp
     cl/cl_bench.cpp
     cl/cl_stress.cpp
+    cl/cl_engine.cpp
     cl/jni_cl.cpp)
 
 target_compile_definitions(fluidframes_native PRIVATE VK_USE_PLATFORM_ANDROID_KHR=1)

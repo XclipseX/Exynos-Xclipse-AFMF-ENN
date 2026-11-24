@@ -18,6 +18,8 @@ internal object NativeBridge {
     @JvmStatic external fun nativeStressPrio(handle: Long): String
     @JvmStatic external fun nativeStressRun(handle: Long, frames: Int): DoubleArray?
     @JvmStatic external fun nativeStressClose(handle: Long)
+    @JvmStatic external fun nativeSetClMode(handle: Long, on: Boolean): String
+    @JvmStatic external fun nativeClInfo(handle: Long): String
     @JvmStatic external fun nativeBenchWarp(assets: AssetManager, outW: Int, outH: Int, procW: Int, procH: Int, iters: Int): String
     @JvmStatic external fun nativeDestroy(handle: Long)
     @JvmStatic external fun nativeSetSurface(handle: Long, surface: Surface?): Boolean

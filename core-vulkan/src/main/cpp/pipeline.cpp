@@ -1,4 +1,6 @@
 #include "pipeline.h"
+#include "cl/cl_engine.h"
+#include <unistd.h>
 
 #include <android/log.h>
 
@@ -59,6 +61,9 @@ std::unique_ptr<Pipeline> Pipeline::Create(AAssetManager* assets, std::string* e
 Pipeline::~Pipeline() {
     if (dev_ != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(dev_);
+        cl_.reset();   // nhả các import dma_buf của OpenCL trước khi huỷ bộ nhớ Vulkan
+        for (int i = 0; i < kAsync; ++i) { DestroyExtBuf(clPrev_[i]); DestroyExtBuf(clCur_[i]); DestroyExtBuf(clOut_[i]); }
+        if (pPack_) vkDestroyPipeline(dev_, pPack_, nullptr);
         DestroyImg(stressImg_[0]); DestroyImg(stressImg_[1]);
         DestroySwapchain();
         if (surface_ != VK_NULL_HANDLE) vkDestroySurfaceKHR(inst_, surface_, nullptr);
@@ -125,6 +130,7 @@ std::string Pipeline::LastError() {
 }
 
 bool Pipeline::Init(AAssetManager* assets) {
+    assets_ = assets;
     // Instance (Vulkan 1.1)
     VkApplicationInfo ai{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     ai.pApplicationName = "fluidframes";
@@ -197,6 +203,19 @@ bool Pipeline::Init(AAssetManager* assets) {
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
     std::vector<const char*> exts(devExts, devExts + sizeof(devExts) / sizeof(devExts[0]));
+    // Xuất bộ nhớ dạng dma_buf cho chế độ OpenCL (không bắt buộc).
+    {
+        bool fdExt = false, dmaExt = false;
+        for (const auto& e : eprops) {
+            if (strcmp(e.extensionName, "VK_KHR_external_memory_fd") == 0) fdExt = true;
+            if (strcmp(e.extensionName, "VK_EXT_external_memory_dma_buf") == 0) dmaExt = true;
+        }
+        if (fdExt && dmaExt) {
+            exts.push_back("VK_KHR_external_memory_fd");
+            exts.push_back("VK_EXT_external_memory_dma_buf");
+            dmaBufExport_ = true;
+        }
+    }
     dci.enabledExtensionCount = static_cast<uint32_t>(exts.size());
     dci.ppEnabledExtensionNames = exts.data();
 
@@ -231,6 +250,10 @@ bool Pipeline::Init(AAssetManager* assets) {
         }
     }
     if (dev_ == VK_NULL_HANDLE) VK_TRY(vkCreateDevice(pd_, &dci, nullptr, &dev_));
+    if (dmaBufExport_) {
+        pfnGetMemoryFd_ = reinterpret_cast<PFN_vkGetMemoryFdKHR>(vkGetDeviceProcAddr(dev_, "vkGetMemoryFdKHR"));
+        if (!pfnGetMemoryFd_) dmaBufExport_ = false;
+    }
     vkGetDeviceQueue(dev_, qf_, 0, &queue_);
 
     pfnGetAhbProps_ = reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(
@@ -336,9 +359,9 @@ bool Pipeline::CreateDescriptors() {
     pli.pPushConstantRanges = &pcr;
     VK_TRY(vkCreatePipelineLayout(dev_, &pli, nullptr, &pl_));
 
-    VkDescriptorPoolSize sizes[3] = {{CIS, 4 * (2 + kAsync)}, {SI, 5 * (2 + kAsync)}, {SB, 3 * (2 + kAsync)}};
+    VkDescriptorPoolSize sizes[3] = {{CIS, 4 * (2 + 2 * kAsync)}, {SI, 5 * (2 + 2 * kAsync)}, {SB, 3 * (2 + 2 * kAsync)}};
     VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    dpi.maxSets = 2 + kAsync;
+    dpi.maxSets = 2 + 2 * kAsync;
     dpi.poolSizeCount = 3;
     dpi.pPoolSizes = sizes;
     VK_TRY(vkCreateDescriptorPool(dev_, &dpi, nullptr, &dpool_));
@@ -350,6 +373,7 @@ bool Pipeline::CreateDescriptors() {
     VK_TRY(vkAllocateDescriptorSets(dev_, &dai, &ds_));
     for (int i = 0; i < kAsync; ++i) VK_TRY(vkAllocateDescriptorSets(dev_, &dai, &af_[i].ds));
     VK_TRY(vkAllocateDescriptorSets(dev_, &dai, &dsSr_));
+    for (int i = 0; i < kAsync; ++i) VK_TRY(vkAllocateDescriptorSets(dev_, &dai, &dsPack_[i]));
     return true;
 }
 
@@ -963,7 +987,9 @@ void Pipeline::PollAsync() {
             stats_[1] = static_cast<float>(ms[1]);
         }
         double wms[1] = {0};
-        if (ReadTimestampsFrom(f.qp, 3, 2, wms)) stats_[2] = static_cast<float>(wms[0]);
+        const int fi = static_cast<int>(&f - af_);
+        if (ReadTimestampsFrom(f.qp, 3, 2, wms))
+            stats_[2] = static_cast<float>(wms[0] + (clMsSlot_[fi] > 0 ? clMsSlot_[fi] : 0.0));
         vkResetFences(dev_, 1, &f.fence);
         f.inflight = false;
         if (f.seq > doneSeq_) doneSeq_ = f.seq;
@@ -988,7 +1014,7 @@ bool Pipeline::EnsureAsync(uint32_t outW, uint32_t outH) {
         if (!MakeImage(f.lowPrev, procW_, procH_, f8, VK_IMAGE_USAGE_STORAGE_BIT)) return false;
         if (!MakeImage(f.lowCur, procW_, procH_, f8, VK_IMAGE_USAGE_STORAGE_BIT)) return false;
         if (!MakeImage(f.flow, flowW_, flowH_, f16, su)) return false;
-        if (!MakeImage(f.out, outW, outH, f8, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) return false;
+        if (!MakeImage(f.out, outW, outH, f8, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) return false;
         if (!MakeImage(f.aux, flowW_, flowH_, f16, su)) return false;
         if (!MakeBuffer(f.nnIn, static_cast<VkDeviceSize>(6) * procW_ * procH_ * sizeof(float))) return false;
         if (!MakeBuffer(f.nnFlow, static_cast<VkDeviceSize>(5) * flowW_ * flowH_ * sizeof(float))) return false;
@@ -1238,6 +1264,32 @@ int Pipeline::NnPre(AHardwareBuffer* prev, AHardwareBuffer* cur) {
     vkCmdPushConstants(cb, pl_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pPre_);
     vkCmdDispatch(cb, CeilDiv(procW_, 8), CeilDiv(procH_, 8), 1);
+    // Chế độ OpenCL: chép prev/cur sang buffer dma_buf tuyến tính cho OpenCL.
+    clPacked_[si] = false;
+    if (clMode_ && cl_ && pPack_ && EnsureClSlots() && clSlotOk_[si]) {
+        const VkImageLayout RO = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkDescriptorImageInfo ii[2] = {{sampler_, a->view, RO}, {sampler_, b->view, RO}};
+        VkDescriptorBufferInfo bb[2] = {{clPrev_[si].buf, 0, VK_WHOLE_SIZE}, {clCur_[si].buf, 0, VK_WHOLE_SIZE}};
+        VkWriteDescriptorSet w[4];
+        for (int k = 0; k < 4; ++k) {
+            w[k] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            w[k].dstSet = dsPack_[si];
+            w[k].descriptorCount = 1;
+        }
+        w[0].dstBinding = 0; w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[0].pImageInfo = &ii[0];
+        w[1].dstBinding = 1; w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[1].pImageInfo = &ii[1];
+        w[2].dstBinding = 4; w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[2].pBufferInfo = &bb[0];
+        w[3].dstBinding = 5; w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[3].pBufferInfo = &bb[1];
+        vkUpdateDescriptorSets(dev_, 4, w, 0, nullptr);
+        CmdExtBarrier(cb, clPrev_[si].buf, true, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        CmdExtBarrier(cb, clCur_[si].buf, true, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl_, 0, 1, &dsPack_[si], 0, nullptr);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pPack_);
+        vkCmdDispatch(cb, CeilDiv(static_cast<int>(F.out.w), 8), CeilDiv(static_cast<int>(F.out.h), 8), 1);
+        CmdExtBarrier(cb, clPrev_[si].buf, false, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        CmdExtBarrier(cb, clCur_[si].buf, false, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        clPacked_[si] = true;
+    }
     CmdMemBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
                   VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_HOST_READ_BIT);
     if (tsValid_) {
@@ -1325,6 +1377,23 @@ int64_t Pipeline::NnPost(int slot) {
     pc.occThr = tuneOcc_.load();
     pc.pad0 = tuneFlags_.load();
 
+    // Chế độ OpenCL: flowpack + warp chạy trên OpenCL (đọc prev/cur từ dma_buf, ghi khung ra vào dma_buf).
+    bool clDone = false;
+    clMsSlot_[slot] = -1;
+    if (clPacked_[slot] && clMode_ && cl_) {
+        double clMs = -1; std::string err;
+        const size_t flowBytes = static_cast<size_t>(5) * flowW_ * flowH_ * sizeof(float);
+        if (cl_->Run(slot, &pc, static_cast<const float*>(F.nnFlow.ptr), flowBytes, F.metrics.ptr, &clMs, &err)) {
+            clDone = true; clErrStreak_ = 0; clMsSlot_[slot] = clMs;
+        } else if (++clErrStreak_ >= 3) {
+            clMode_ = false;
+            SetClInfo("OpenCL lỗi 3 lần liền, đã tắt (dùng Vulkan): " + err);
+        } else {
+            SetClInfo("OpenCL lỗi (khung này dùng Vulkan): " + err);
+        }
+    }
+    clPacked_[slot] = false;
+
     VkCommandBuffer cb = F.cb;
     if (vkResetCommandBuffer(cb, 0) != VK_SUCCESS) { scDirty_ = true; return giveUp(); }
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -1332,6 +1401,21 @@ int64_t Pipeline::NnPost(int slot) {
     if (vkBeginCommandBuffer(cb, &bi) != VK_SUCCESS) { scDirty_ = true; return giveUp(); }
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl_, 0, 1, &F.ds, 0, nullptr);
     vkCmdPushConstants(cb, pl_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
+    if (clDone) {
+        // Khung nội suy do OpenCL ghi -> chép vào ảnh A.
+        if (tsValid_) vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, F.qp, 3);
+        CmdExtBarrier(cb, clOut_[slot].buf, true, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy c{};
+        c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        c.imageExtent = {F.out.w, F.out.h, 1};
+        vkCmdCopyBufferToImage(cb, clOut_[slot].buf, F.out.img, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+        CmdExtBarrier(cb, clOut_[slot].buf, false, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkMemoryBarrier tb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        tb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        tb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &tb, 0, nullptr, 0, nullptr);
+        if (tsValid_) vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, F.qp, 4);
+    } else {
     // flow NPU (buffer) -> ảnh flow/aux
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pFlowPack_);
     vkCmdDispatch(cb, CeilDiv(flowW_, 8), CeilDiv(flowH_, 8), 1);
@@ -1342,6 +1426,7 @@ int64_t Pipeline::NnPost(int slot) {
     vkCmdDispatch(cb, CeilDiv(static_cast<int>(F.out.w), 8), CeilDiv(static_cast<int>(F.out.h), 8), 1);
     CmdMemBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
     if (tsValid_) vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, F.qp, 4);
+    }
     CmdBlitOut(cb, idxA, F.out.img, F.out.w, F.out.h);
     VkMemoryBarrier war{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     war.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
@@ -1350,6 +1435,7 @@ int64_t Pipeline::NnPost(int slot) {
                          0, 1, &war, 0, nullptr, 0, nullptr);
     pc.mode = 0;
     vkCmdPushConstants(cb, pl_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pWarp_);
     vkCmdDispatch(cb, CeilDiv(static_cast<int>(F.out.w), 8), CeilDiv(static_cast<int>(F.out.h), 8), 1);
     CmdMemBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
     CmdRelease(cb, a);
@@ -2184,6 +2270,135 @@ void Pipeline::StressClose() {
     DestroyImg(stressImg_[0]); DestroyImg(stressImg_[1]);
     stressFlow_.clear(); stressFlow_.shrink_to_fit();
     afOutW_ = 0;
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// OpenCL (thử nghiệm): Vulkan cấp buffer dma_buf, OpenCL import và tính flowpack + warp.
+// ---------------------------------------------------------------------------------------------
+
+void Pipeline::SetClInfo(const std::string& s) {
+    std::lock_guard<std::mutex> l(clInfoMu_);
+    clInfo_ = s;
+}
+
+std::string Pipeline::ClInfo() {
+    std::lock_guard<std::mutex> l(clInfoMu_);
+    return clInfo_;
+}
+
+bool Pipeline::ClActive() { std::lock_guard<std::mutex> lk(mu_); return clMode_ && cl_ != nullptr; }
+
+bool Pipeline::MakeExtBuf(ExtBuf& b, VkDeviceSize size) {
+    DestroyExtBuf(b);
+    VkExternalMemoryBufferCreateInfo ebi{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+    ebi.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.pNext = &ebi;
+    bci.size = size;
+    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(dev_, &bci, nullptr, &b.buf) != VK_SUCCESS) return false;
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(dev_, b.buf, &mr);
+    VkMemoryDedicatedAllocateInfo ded{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+    ded.buffer = b.buf;
+    VkExportMemoryAllocateInfo emi{VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO};
+    emi.pNext = &ded;
+    emi.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.pNext = &emi;
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = FindMemType(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (mai.memoryTypeIndex == UINT32_MAX) mai.memoryTypeIndex = FindMemType(mr.memoryTypeBits, 0);
+    if (mai.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(dev_, &mai, nullptr, &b.mem) != VK_SUCCESS ||
+        vkBindBufferMemory(dev_, b.buf, b.mem, 0) != VK_SUCCESS) { DestroyExtBuf(b); return false; }
+    VkMemoryGetFdInfoKHR gi{VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR};
+    gi.memory = b.mem;
+    gi.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+    if (!pfnGetMemoryFd_ || pfnGetMemoryFd_(dev_, &gi, &b.fd) != VK_SUCCESS || b.fd < 0) { DestroyExtBuf(b); return false; }
+    b.size = mr.size;
+    return true;
+}
+
+void Pipeline::DestroyExtBuf(ExtBuf& b) {
+    if (b.fd >= 0) close(b.fd);
+    if (b.buf) vkDestroyBuffer(dev_, b.buf, nullptr);
+    if (b.mem) vkFreeMemory(dev_, b.mem, nullptr);
+    b = ExtBuf{};
+}
+
+void Pipeline::CmdExtBarrier(VkCommandBuffer cb, VkBuffer buf, bool acquire, VkAccessFlags access, VkPipelineStageFlags stage) {
+    VkBufferMemoryBarrier b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    b.buffer = buf;
+    b.offset = 0;
+    b.size = VK_WHOLE_SIZE;
+    if (acquire) {
+        b.srcAccessMask = 0; b.dstAccessMask = access;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL; b.dstQueueFamilyIndex = qf_;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, stage, 0, 0, nullptr, 1, &b, 0, nullptr);
+    } else {
+        b.srcAccessMask = access; b.dstAccessMask = 0;
+        b.srcQueueFamilyIndex = qf_; b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+        vkCmdPipelineBarrier(cb, stage, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 1, &b, 0, nullptr);
+    }
+}
+
+// Gọi trong mu_. Tạo/tạo lại buffer dma_buf cho 3 khung khi kích thước khung hoặc proc đổi.
+bool Pipeline::EnsureClSlots() {
+    if (!cl_) return false;
+    const uint32_t w = af_[0].out.w, h = af_[0].out.h;
+    if (w == 0 || h == 0) return false;
+    if (w == clW_ && h == clH_ && procW_ == clProcW_ && procH_ == clProcH_) {
+        for (bool ok : clSlotOk_) if (ok) return true;
+        return false;
+    }
+    DrainAsync();
+    vkDeviceWaitIdle(dev_);
+    for (bool& p : clPacked_) p = false;
+    cl_->ReleaseSlots();
+    const VkDeviceSize sz = static_cast<VkDeviceSize>(w) * h * 4;
+    bool any = false;
+    std::string lastErr;
+    for (int i = 0; i < kAsync; ++i) {
+        clSlotOk_[i] = false;
+        if (!MakeExtBuf(clPrev_[i], sz) || !MakeExtBuf(clCur_[i], sz) || !MakeExtBuf(clOut_[i], sz)) {
+            lastErr = "Vulkan không cấp/xuất được buffer dma_buf";
+            continue;
+        }
+        std::string err;
+        clSlotOk_[i] = cl_->SetupSlot(i, clPrev_[i].fd, clCur_[i].fd, clOut_[i].fd, static_cast<size_t>(sz),
+                                      static_cast<int>(w), static_cast<int>(h), static_cast<int>(w * 4), procW_, procH_, &err);
+        if (!clSlotOk_[i]) lastErr = err;
+        any = any || clSlotOk_[i];
+    }
+    clW_ = w; clH_ = h; clProcW_ = procW_; clProcH_ = procH_;
+    if (!any) SetClInfo("OpenCL không import được dma_buf (dùng Vulkan): " + lastErr);
+    else SetClInfo("OpenCL · " + cl_->Describe() + " · " + std::to_string(w) + "x" + std::to_string(h));
+    return any;
+}
+
+std::string Pipeline::SetClMode(bool on) {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (!on) { clMode_ = false; SetClInfo("Vulkan"); return "Vulkan"; }
+    if (clMode_ && cl_) return ClInfo();
+    if (!dmaBufExport_) { SetClInfo("Không bật được OpenCL: Vulkan thiếu VK_EXT_external_memory_dma_buf"); return ClInfo(); }
+    if (!pPack_) pPack_ = MakeComputePipeline(assets_, "cl_pack");
+    if (!pPack_) { SetClInfo("Không bật được OpenCL: thiếu shader cl_pack"); return ClInfo(); }
+    if (!cl_) {
+        AAsset* a = assets_ ? AAssetManager_open(assets_, "cl/frame_kernels.cl", AASSET_MODE_BUFFER) : nullptr;
+        if (!a) { SetClInfo("Không bật được OpenCL: thiếu cl/frame_kernels.cl"); return ClInfo(); }
+        std::string src(static_cast<const char*>(AAsset_getBuffer(a)), static_cast<size_t>(AAsset_getLength(a)));
+        AAsset_close(a);
+        std::string info;
+        cl_ = ffcl::ClEngine::Create(src, &info);
+        if (!cl_) { SetClInfo("Không bật được OpenCL: " + info); return ClInfo(); }
+    }
+    clErrStreak_ = 0;
+    clW_ = 0;   // dựng lại slot ở khung kế tiếp
+    clMode_ = true;
+    SetClInfo("OpenCL · " + cl_->Describe() + " (chờ khung đầu)");
+    return ClInfo();
 }
 
 }  // namespace ff

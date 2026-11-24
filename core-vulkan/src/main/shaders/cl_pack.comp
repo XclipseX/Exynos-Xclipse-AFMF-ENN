@@ -1,0 +1,23 @@
+#version 450
+// Chế độ OpenCL: chép khung trước/khung hiện tại (AHardwareBuffer ảnh chụp) sang buffer dma_buf tuyến tính
+// (RGBA8, hàng sát nhau) để OpenCL đọc mà không cần chép qua CPU.
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D uPrev;
+layout(set = 0, binding = 1) uniform sampler2D uCur;
+layout(set = 0, binding = 4) writeonly buffer PrevBuf { uint pPrev[]; };
+layout(set = 0, binding = 5) writeonly buffer CurBuf { uint pCur[]; };
+
+layout(push_constant) uniform PC {
+    int srcW, srcH, lowW, lowH, flowW, flowH, outW, outH;
+    float t; int mode; int useNN; int pad0;
+    float flowScaleX, flowScaleY; float staticThr; float occThr;
+} pc;
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (q.x >= pc.outW || q.y >= pc.outH) return;
+    uint i = uint(q.y * pc.outW + q.x);
+    pPrev[i] = packUnorm4x8(texelFetch(uPrev, q, 0));
+    pCur[i] = packUnorm4x8(texelFetch(uCur, q, 0));
+}

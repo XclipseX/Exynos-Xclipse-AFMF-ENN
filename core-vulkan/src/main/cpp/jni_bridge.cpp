@@ -220,3 +220,15 @@ FN(void, nativeStressClose)(JNIEnv*, jclass, jlong h) {
     p->StressClose();
     delete p;
 }
+
+// Chế độ tính toán OpenCL (thử nghiệm) cho đường NPU.
+FN(jstring, nativeSetClMode)(JNIEnv* env, jclass, jlong h, jboolean on) {
+    auto* p = reinterpret_cast<ff::Pipeline*>(h);
+    if (!p) return env->NewStringUTF("");
+    return env->NewStringUTF(p->SetClMode(on == JNI_TRUE).c_str());
+}
+
+FN(jstring, nativeClInfo)(JNIEnv* env, jclass, jlong h) {
+    auto* p = reinterpret_cast<ff::Pipeline*>(h);
+    return env->NewStringUTF(p ? p->ClInfo().c_str() : "");
+}
