@@ -74,7 +74,7 @@ jobs:
 
       # Release "nightly": luôn là APK mới nhất của feat/initial-import, link tải cố định.
       - name: Publish nightly release
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/feat/initial-import'
+        if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/bisect-')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -82,7 +82,7 @@ jobs:
           cp "$apk" XclipseENN-SS.apk
           short=$(git rev-parse --short HEAD)
           msg=$(git log -1 --pretty=%s)
-          gh release delete nightly -y --cleanup-tag 2>/dev/null || true
-          gh release create nightly XclipseENN-SS.apk --prerelease --target "$GITHUB_SHA" \
-            --title "Bản mới nhất ($short)" \
+          gh release delete test-609e627 -y --cleanup-tag 2>/dev/null || true
+          gh release create test-609e627 XclipseENN-SS.apk --prerelease --target "$GITHUB_SHA" \
+            --title "Bản so lỗi phóng to ($short)" \
             --notes "Build #${GITHUB_RUN_NUMBER} · commit $short: $msg"
